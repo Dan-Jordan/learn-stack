@@ -1,0 +1,17 @@
+# Environment
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+
+# Pytest
+.pytest_cache/
+
+# Notes inbox — keep the folder structure but not imported notes
+notes-inbox/processed/
