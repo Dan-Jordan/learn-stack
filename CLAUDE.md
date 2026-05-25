@@ -42,33 +42,54 @@ When working on Phase 1–3, keep the RAG architecture in mind even when not bui
 
 ## Current phase
 
-**Phase 1 — Basic notes app**
+**Phase 1 — Basic notes app (in progress)**
 
 Goal: Build a FastAPI backend with Postgres that supports full CRUD on technical notes, plus basic keyword search.
 
 Done when: A note about `dbt seed` can be created, stored, retrieved by ID, found via keyword search, updated, and deleted — all through the API.
 
+**Phase 1 progress:**
+
+Built:
+- [x] SQLAlchemy async engine and session (`app/database.py`)
+- [x] Note ORM model with all Phase 1 fields (`app/models/note.py`)
+- [x] Pydantic schemas: NoteCreate, NoteUpdate, NoteResponse (`app/schemas/note.py`)
+- [x] PostgreSQL 15 service via Docker Compose
+- [x] `notes-inbox/` note capture workflow and batch import script (`import_notes.py`)
+
+Remaining:
+- [ ] FastAPI entry point (`app/main.py`)
+- [ ] Route handlers (`app/routers/notes.py`)
+- [ ] CRUD operations (`app/crud/notes.py`)
+- [ ] Dockerfile and app service in docker-compose.yml
+- [ ] Test suite (`tests/test_notes.py`)
+
 ---
 
 ## Repository structure
 
+Files marked `[planned]` are specified but not yet created.
+
 ```
 learnstack/
 ├── app/
-│   ├── main.py              # FastAPI app entry point
+│   ├── main.py              # FastAPI app entry point  [planned]
 │   ├── database.py          # SQLAlchemy engine and session
 │   ├── models/              # SQLAlchemy ORM models
-│   │   └── note.py
+│   │   └── note.py          # Note ORM model and NoteType enum
 │   ├── schemas/             # Pydantic request/response schemas
-│   │   └── note.py
-│   ├── routers/             # FastAPI route handlers
+│   │   └── note.py          # NoteCreate, NoteUpdate, NoteResponse
+│   ├── routers/             # FastAPI route handlers  [planned]
 │   │   └── notes.py
-│   └── crud/                # Database operations (separate from routing)
+│   └── crud/                # Database operations (separate from routing)  [planned]
 │       └── notes.py
-├── tests/
+├── tests/                   # [planned]
 │   └── test_notes.py
-├── docker-compose.yml
-├── Dockerfile
+├── notes-inbox/             # Markdown notes awaiting API import
+│   └── _template.md
+├── import_notes.py          # Batch import script (posts inbox files to API)
+├── docker-compose.yml       # PostgreSQL 15 service (no app service yet)
+├── Dockerfile               # [planned]
 ├── requirements.txt
 ├── .env.example
 ├── README.md
@@ -223,6 +244,17 @@ While the API is being built, notes are written as markdown files and batch-impo
 **To create a note:** tell Claude Code "create a note about X". It will write a new file to `notes-inbox/` using `notes-inbox/_template.md` as the format and `notes-inbox/sqlalchemy-session-unit-of-work.md` as a filled-in example.
 
 **To import notes:** once the API is running, `python import_notes.py` posts all inbox files to the API and moves them to `notes-inbox/processed/`.
+
+---
+
+## Implementation workflow
+
+Before changing code, create a short implementation plan that includes:
+- Files expected to be edited
+- Risks or gotchas
+- Tests to run after the change
+
+After implementation, summarize the diff and explain how to validate the change works.
 
 ---
 

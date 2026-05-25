@@ -56,7 +56,7 @@ Later additions: embeddings, pgvector, semantic search, optional frontend.
 
 ## Project phases
 
-### Phase 1 — Basic notes app
+### Phase 1 — Basic notes app *(in progress)*
 Save, retrieve, update, delete, and keyword-search technical notes. Core CRUD. Postgres backend. Docker Compose. Tests.
 
 **Done when:** I can create a note about `dbt seed`, save it, find it by searching `dbt`, and retrieve it cleanly.
@@ -106,18 +106,27 @@ Avoid over-engineering. If a feature does not help capture or retrieve learning,
 
 ## Getting started
 
-> Setup instructions will be added as the project is built out.
+> Phase 1 is in progress. The database layer is built; the FastAPI app layer is not yet containerized. Instructions will be updated as each piece is completed.
 
 ```bash
 # Clone the repo
 git clone https://github.com/your-username/learnstack.git
 cd learnstack
 
-# Start services
-docker compose up --build
+# Copy env file and fill in credentials
+cp .env.example .env
 
-# API docs available at
-http://localhost:8000/docs
+# Start the database
+docker compose up -d
+
+# Install Python dependencies
+pip install -r requirements.txt
+
+# Start the API (once app/main.py is built)
+# uvicorn app.main:app --reload
+
+# API docs (once running)
+# http://localhost:8000/docs
 ```
 
 ---
