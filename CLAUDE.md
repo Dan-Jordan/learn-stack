@@ -42,19 +42,23 @@ When working on Phase 1–3, keep the RAG architecture in mind even when not bui
 
 ## Current phase
 
-**Phase 2 — reshaped (see below)**
+**Phase 3 — TBD**
 
-Phase 1 is complete. Phase 2 has been deliberately simplified — the priority is consolidating Phase 1 understanding before adding complexity.
+Phases 1 and 2 are complete. Next phase to be determined based on what feels most useful.
 
 ---
 
-## Phase 2 — Alembic migrations only
+## Phase 2 — Complete ✓
 
-The original Phase 2 scope included new model fields (tags, source, confidence, status) plus Alembic migrations. The extra fields are deferred until the system is in real use and the need is felt. Alembic is the only planned addition.
+The original Phase 2 scope included new model fields (tags, source, confidence, status) plus Alembic migrations. The extra fields are deferred until the system is in real use and the need is felt. Alembic was the only addition.
 
-**Goal:** Replace the `create_all` on startup approach with Alembic migrations — the standard way real projects manage schema changes safely.
+**Goal:** Replace the `create_all` on startup approach with Alembic migrations — the standard way real projects manage schema changes safely. ✓
 
-**Done when:** Alembic is initialized, the current schema is captured as the first migration, and the app starts cleanly using `alembic upgrade head` instead of `create_all`.
+Built:
+- [x] Alembic initialized (`alembic.ini`, `alembic/env.py`)
+- [x] env.py configured for async engine and model registration
+- [x] First migration generated and applied (`alembic/versions/`)
+- [x] `create_all` removed from `app/main.py`
 
 **What is explicitly deferred from original Phase 2:**
 - tags (Array[String])
