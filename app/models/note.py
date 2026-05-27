@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from sqlalchemy import String, Text, Enum, DateTime
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
+from pgvector.sqlalchemy import Vector
 from app.database import Base
 
 
@@ -34,3 +35,4 @@ class Note(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(1536), nullable=True)

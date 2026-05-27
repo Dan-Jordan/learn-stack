@@ -4,10 +4,12 @@ from sqlalchemy import select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.note import Note
 from app.schemas.note import NoteCreate, NoteUpdate
+from app.embeddings import embed_text
 
 
 async def create_note(db: AsyncSession, note_in: NoteCreate) -> Note:
     note = Note(**note_in.model_dump())
+    note.embedding = await embed_text(note.content)
     db.add(note)
     await db.commit()
     await db.refresh(note)
@@ -44,8 +46,11 @@ async def update_note(
     note = await get_note(db, note_id)
     if note is None:
         return None
-    for field, value in note_in.model_dump(exclude_unset=True).items():
+    updates = note_in.model_dump(exclude_unset=True)
+    for field, value in updates.items():
         setattr(note, field, value)
+    if "content" in updates:
+        note.embedding = await embed_text(note.content)
     note.updated_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(note)
