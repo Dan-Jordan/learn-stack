@@ -42,9 +42,9 @@ When working on Phase 1–3, keep the RAG architecture in mind even when not bui
 
 ## Current phase
 
-**Phase 3 — pgvector**
+**Phase 4 — Embedding pipeline**
 
-Phases 1 and 2 are complete. The next four phases build the RAG system on top of the existing notes foundation.
+Phases 1, 2, and 3 are complete. The next three phases build the RAG system on top of the existing notes foundation.
 
 ---
 
@@ -63,11 +63,15 @@ Phases 1 and 2 are complete. The next four phases build the RAG system on top of
 
 ---
 
-## Phase 3 — pgvector
+## Phase 3 — Complete ✓
 
-**Goal:** Add the pgvector Postgres extension and an `embedding` column to the notes table via Alembic migration. No Python application changes yet — just learning how Postgres extensions work and how to add a column to an existing table safely.
+**Goal:** Add the pgvector Postgres extension and an `embedding` column to the notes table via Alembic migration. No Python application changes yet — just learning how Postgres extensions work and how to add a column to an existing table safely. ✓
 
-**Done when:** The `notes` table has an `embedding` column of type `vector(1536)` and the pgvector extension is enabled in Postgres.
+Built:
+- [x] Switched Docker image to a custom build with pgvector compiled from source (`Dockerfile`)
+- [x] `pgvector>=0.3.0` added to `requirements.txt`
+- [x] Alembic migration: `CREATE EXTENSION IF NOT EXISTS vector` + `embedding vector(1536)` column (`alembic/versions/7fd0d6c70b7f_add_pgvector_embedding_column.py`)
+- [x] Migration applied — pgvector 0.8.0 active, `notes` table has `embedding` column
 
 ---
 
