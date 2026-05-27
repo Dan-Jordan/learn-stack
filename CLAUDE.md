@@ -42,9 +42,32 @@ When working on Phase 1–3, keep the RAG architecture in mind even when not bui
 
 ## Current phase
 
-**Phase 3 — TBD**
+**Phase 3 — pgvector**
 
-Phases 1 and 2 are complete. Next phase to be determined based on what feels most useful.
+Phases 1 and 2 are complete. The next four phases build the RAG system on top of the existing notes foundation.
+
+---
+
+## RAG phases overview
+
+| Phase | Focus | Done when |
+|---|---|---|
+| 3 | pgvector setup | `embedding` column added to notes table via Alembic migration |
+| 4 | Embedding pipeline | Notes get vector embeddings generated and stored on create/update |
+| 5 | Semantic search | `POST /query` returns notes ranked by meaning, not just keywords |
+| 6 | LLM answer generation | A question returns a grounded answer citing your own notes |
+
+**Embedding model:** OpenAI text-embedding API (industry standard, fractions of a cent per note for personal use).
+
+**Deferred to Phase 7:** An agent that drafts notes from raw content (paste in a doc or Stack Overflow answer, get a structured note back).
+
+---
+
+## Phase 3 — pgvector
+
+**Goal:** Add the pgvector Postgres extension and an `embedding` column to the notes table via Alembic migration. No Python application changes yet — just learning how Postgres extensions work and how to add a column to an existing table safely.
+
+**Done when:** The `notes` table has an `embedding` column of type `vector(1536)` and the pgvector extension is enabled in Postgres.
 
 ---
 
