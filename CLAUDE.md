@@ -42,9 +42,9 @@ When working on Phase 1–3, keep the RAG architecture in mind even when not bui
 
 ## Current phase
 
-**Phase 4 — Embedding pipeline**
+**Phase 5 — Semantic search**
 
-Phases 1, 2, and 3 are complete. The next three phases build the RAG system on top of the existing notes foundation.
+Phases 1, 2, 3, and 4 are complete. The next two phases build the query and answer layer on top of the embedding pipeline.
 
 ---
 
@@ -60,6 +60,19 @@ Phases 1, 2, and 3 are complete. The next three phases build the RAG system on t
 **Embedding model:** OpenAI text-embedding API (industry standard, fractions of a cent per note for personal use).
 
 **Deferred to Phase 7:** An agent that drafts notes from raw content (paste in a doc or Stack Overflow answer, get a structured note back).
+
+---
+
+## Phase 4 — Complete ✓
+
+**Goal:** Generate and store vector embeddings for notes automatically on create and update. ✓
+
+Built:
+- [x] `openai>=1.0.0` added to `requirements.txt`
+- [x] `OPENAI_API_KEY` added to `.env.example`
+- [x] `app/embeddings.py` — async helper calling `text-embedding-3-small`, returns 1536 floats
+- [x] `app/models/note.py` — `embedding` column added to ORM model using `pgvector.sqlalchemy.Vector(1536)`
+- [x] `app/crud/notes.py` — `create_note` embeds on create; `update_note` re-embeds only when `content` changes
 
 ---
 
