@@ -99,6 +99,10 @@ def main():
             shutil.move(str(path), str(PROCESSED / path.name))
             print(f"  saved  {path.name}  →  {note_id}")
             success += 1
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="replace")
+            print(f"  ERROR  {path.name}: HTTP {e.code} — {body}")
+            failed += 1
         except urllib.error.URLError:
             print(f"  ERROR  Cannot connect to {API_URL} — is the API running?")
             break
