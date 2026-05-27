@@ -42,27 +42,28 @@ When working on Phase 1–3, keep the RAG architecture in mind even when not bui
 
 ## Current phase
 
-**Phase 1 — Basic notes app (in progress)**
+**Phase 2 — next up**
+
+Phase 1 is complete. See decisions log for what was built and any choices made during the build.
+
+---
+
+## Phase 1 — Complete ✓
 
 Goal: Build a FastAPI backend with Postgres that supports full CRUD on technical notes, plus basic keyword search.
 
-Done when: A note about `dbt seed` can be created, stored, retrieved by ID, found via keyword search, updated, and deleted — all through the API.
-
-**Phase 1 progress:**
+Done when: A note about `dbt seed` can be created, stored, retrieved by ID, found via keyword search, updated, and deleted — all through the API. ✓
 
 Built:
+- [x] PostgreSQL 15 service via Docker Compose (`docker-compose.yml`)
 - [x] SQLAlchemy async engine and session (`app/database.py`)
 - [x] Note ORM model with all Phase 1 fields (`app/models/note.py`)
 - [x] Pydantic schemas: NoteCreate, NoteUpdate, NoteResponse (`app/schemas/note.py`)
-- [x] PostgreSQL 15 service via Docker Compose
+- [x] CRUD operations (`app/crud/notes.py`)
+- [x] Route handlers (`app/routers/notes.py`)
+- [x] FastAPI entry point with lifespan table creation (`app/main.py`)
+- [x] Test suite — 10 tests passing (`tests/test_notes.py`)
 - [x] `notes-inbox/` note capture workflow and batch import script (`import_notes.py`)
-
-Remaining:
-- [ ] FastAPI entry point (`app/main.py`)
-- [ ] Route handlers (`app/routers/notes.py`)
-- [ ] CRUD operations (`app/crud/notes.py`)
-- [ ] Dockerfile and app service in docker-compose.yml
-- [ ] Test suite (`tests/test_notes.py`)
 
 ---
 
