@@ -43,3 +43,13 @@ class QueryRequest(BaseModel):
 
 class QueryResult(NoteResponse):
     score: float
+
+
+class AskRequest(BaseModel):
+    q: str
+    limit: int = 5
+
+
+class AskResponse(BaseModel):
+    answer: str
+    sources: list[NoteResponse]
