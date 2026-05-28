@@ -64,3 +64,20 @@ async def delete_note(db: AsyncSession, note_id: uuid.UUID) -> bool:
     await db.delete(note)
     await db.commit()
     return True
+
+
+async def search_notes_semantic(
+    db: AsyncSession,
+    query: str,
+    limit: int = 10,
+) -> list[tuple[Note, float]]:
+    query_embedding = await embed_text(query)
+    distance_expr = Note.embedding.cosine_distance(query_embedding)
+    stmt = (
+        select(Note, distance_expr.label("distance"))
+        .where(Note.embedding.isnot(None))
+        .order_by(distance_expr)
+        .limit(limit)
+    )
+    rows = (await db.execute(stmt)).all()
+    return [(note, 1 - distance) for note, distance in rows]

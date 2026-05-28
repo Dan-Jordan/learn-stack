@@ -34,3 +34,12 @@ class NoteResponse(BaseModel):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class QueryRequest(BaseModel):
+    q: str
+    limit: int = 10
+
+
+class QueryResult(NoteResponse):
+    score: float
