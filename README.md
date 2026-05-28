@@ -16,8 +16,10 @@ LearnStack is not a second brain or an AI agent. It is a backend application tha
 
 - Save technical notes with structured metadata (type, tool, topic, project)
 - Retrieve and search notes by keyword
+- Query notes by meaning via `POST /query` — semantic search using vector embeddings
 - Full CRUD via a FastAPI REST API
-- Postgres backend with schema managed by Alembic migrations
+- Postgres backend with pgvector extension, schema managed by Alembic migrations
+- Embeddings generated automatically on note create/update via OpenAI text-embedding API
 - Markdown-based note capture workflow for capturing learning before the API is running
 
 ---
@@ -57,16 +59,16 @@ Full CRUD on technical notes. Keyword search. Postgres backend. Docker Compose. 
 ### Phase 2 — Alembic migrations ✓
 Replaced `create_all` on startup with Alembic migration scripts. Schema changes are now versioned and safe.
 
-### Phase 3 — pgvector *(next)*
-Add the pgvector Postgres extension and an `embedding` column to the notes table via Alembic migration. Foundation for semantic search.
+### Phase 3 — pgvector ✓
+Added the pgvector Postgres extension and an `embedding` column to the notes table via Alembic migration. Custom Docker image compiles pgvector from source.
 
-### Phase 4 — Embedding pipeline
-Generate and store vector embeddings when notes are created or updated using the OpenAI embedding API. Backfill existing notes.
+### Phase 4 — Embedding pipeline ✓
+Notes get vector embeddings generated and stored automatically on create/update using the OpenAI text-embedding API (`text-embedding-3-small`, 1536 dimensions).
 
-### Phase 5 — Semantic search
-`POST /query` takes a natural language question, embeds it, and returns notes ranked by meaning using pgvector similarity search.
+### Phase 5 — Semantic search ✓
+`POST /query` takes a natural language question, embeds it, and returns notes ranked by meaning using pgvector cosine similarity.
 
-### Phase 6 — LLM answer generation
+### Phase 6 — LLM answer generation *(current)*
 Pass retrieved notes + question to an LLM. Return a grounded answer with citations drawn from your own captured knowledge.
 
 ### Phase 7 — Note drafting agent *(future)*
@@ -83,13 +85,16 @@ cd learn-stack
 
 # Copy env file and fill in credentials
 cp .env.example .env
+# Edit .env — set POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB, and OPENAI_API_KEY
+# OPENAI_API_KEY is required for the embedding pipeline (Phase 4+)
 
-# Start the database
+# Start the database (first run builds the custom pgvector image — takes ~1 min)
 docker compose up db -d
 
 # Create a virtual environment and install dependencies
 python -m venv .venv
-.venv\Scripts\activate
+.venv\Scripts\activate        # Windows
+# source .venv/bin/activate   # macOS/Linux
 pip install -r requirements.txt
 
 # Apply migrations
@@ -100,6 +105,25 @@ uvicorn app.main:app --reload
 
 # API docs
 # http://localhost:8000/docs
+```
+
+### Running tests
+
+Tests use a separate database. Run these two commands once after first starting the container:
+
+```bash
+docker exec learn-stack-db-1 psql -U postgres -c "CREATE DATABASE learnstack_test;"
+docker exec learn-stack-db-1 psql -U postgres -d learnstack_test -c "CREATE EXTENSION IF NOT EXISTS vector;"
+```
+
+The `vector` extension must be enabled in the test database separately — it is not inherited from the main database, and the `embedding` column type won't be recognized without it.
+
+These only need to be run once. The databases persist in the Docker volume across restarts. You would need to repeat this after `docker compose down -v` (which destroys volumes).
+
+`TEST_DATABASE_URL` in `.env` must point to this database (already set in `.env.example`).
+
+```bash
+pytest
 ```
 
 ---
