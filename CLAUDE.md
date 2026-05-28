@@ -42,9 +42,9 @@ When working on Phase 1–3, keep the RAG architecture in mind even when not bui
 
 ## Current phase
 
-**Phase 5 — Semantic search**
+**Phase 6 — LLM answer generation**
 
-Phases 1, 2, 3, and 4 are complete. The next two phases build the query and answer layer on top of the embedding pipeline.
+Phases 1, 2, 3, 4, and 5 are complete. The next phase builds the answer layer on top of semantic search.
 
 ---
 
@@ -60,6 +60,20 @@ Phases 1, 2, 3, and 4 are complete. The next two phases build the query and answ
 **Embedding model:** OpenAI text-embedding API (industry standard, fractions of a cent per note for personal use).
 
 **Deferred to Phase 7:** An agent that drafts notes from raw content (paste in a doc or Stack Overflow answer, get a structured note back).
+
+---
+
+## Phase 5 — Complete ✓
+
+**Goal:** `POST /query` accepts a question string and returns notes ranked by semantic similarity. ✓
+
+Built:
+- [x] `QueryRequest` and `QueryResult` schemas added to `app/schemas/note.py`
+- [x] `search_notes_semantic` added to `app/crud/notes.py` — embeds query, runs pgvector cosine distance, filters NULL embeddings, returns `(note, score)` pairs
+- [x] `app/routers/query.py` — `POST /query` endpoint, registered in `app/main.py`
+- [x] `tests/test_query.py` — 6 tests: empty DB, happy path, score shape, response fields, ranking, limit
+
+**Note:** No vector index added (ivfflat/hnsw). Not needed at personal-note scale. Add via Alembic migration if query performance degrades as the notes database grows.
 
 ---
 
@@ -249,6 +263,7 @@ Search is via query param: `GET /notes?q=dbt`
 - Use a separate test database (set via environment variable)
 - At minimum: test create, read, update, delete, and keyword search for notes
 - Tests live in `tests/`, mirror the structure of `app/`
+- **Review `tests/conftest.py`** to understand how the test database is created empty and torn down between runs — the fixture setup there is the source of truth for test isolation
 
 ### Environment
 - Never commit secrets or `.env` files
