@@ -42,9 +42,9 @@ When working on Phase 1–3, keep the RAG architecture in mind even when not bui
 
 ## Current phase
 
-**Phase 6 — LLM answer generation**
+**Phase 6 — Complete ✓**
 
-Phases 1, 2, 3, 4, and 5 are complete. The next phase builds the answer layer on top of semantic search.
+Phases 1–6 are complete. The full RAG pipeline is working: notes are stored, embedded, retrieved semantically, and answered by Claude with source citations. Phase 7 is next.
 
 ---
 
@@ -60,6 +60,26 @@ Phases 1, 2, 3, 4, and 5 are complete. The next phase builds the answer layer on
 **Embedding model:** OpenAI text-embedding API (industry standard, fractions of a cent per note for personal use).
 
 **Deferred to Phase 7:** An agent that drafts notes from raw content (paste in a doc or Stack Overflow answer, get a structured note back).
+
+---
+
+## Phase 6 — Complete ✓
+
+**Goal:** `POST /ask` accepts a question and returns a grounded answer citing the user's own notes. ✓
+
+Built:
+- [x] `anthropic>=0.25.0` added to `requirements.txt`
+- [x] `ANTHROPIC_API_KEY` added to `.env.example`
+- [x] `app/llm.py` — async Anthropic client, `generate_answer(question, context_notes)` builds context from retrieved notes and calls `claude-haiku-4-5-20251001`
+- [x] `AskRequest` and `AskResponse` schemas added to `app/schemas/note.py`
+- [x] `app/routers/ask.py` — `POST /ask` endpoint: semantic search → LLM → answer + sources
+- [x] `app/main.py` — ask router registered
+- [x] `tests/test_ask.py` — 5 tests using `AsyncMock` to patch `generate_answer`
+
+**Design decisions:**
+- `_client()` is a function (not module-level) so the Anthropic SDK doesn't read `ANTHROPIC_API_KEY` at import time
+- Tests mock `generate_answer` because LLM responses are non-deterministic; real API calls are tested for embeddings (deterministic) but not for answers
+- `sources` in the response are the notes actually passed as context — caller can see exactly what grounded the answer
 
 ---
 
@@ -202,7 +222,7 @@ learnstack/
 
 ---
 
-## API surface (Phase 1)
+## API surface
 
 | Method | Path | Description |
 |---|---|---|
@@ -211,8 +231,10 @@ learnstack/
 | GET | `/notes/{id}` | Get a single note |
 | PUT | `/notes/{id}` | Update a note |
 | DELETE | `/notes/{id}` | Delete a note |
+| POST | `/query` | Semantic search — returns notes ranked by meaning with scores |
+| POST | `/ask` | RAG answer — returns a grounded answer + source notes |
 
-Search is via query param: `GET /notes?q=dbt`
+Keyword search via query param: `GET /notes?q=dbt`
 
 ---
 
@@ -227,6 +249,8 @@ Search is via query param: `GET /notes?q=dbt`
 | Environment | Docker Compose | v2 |
 | Testing | pytest + httpx | — |
 | Python | 3.11+ | — |
+| Embeddings | OpenAI text-embedding-3-small | via `openai>=1.0.0` |
+| LLM | Anthropic Claude (Haiku) | via `anthropic>=0.25.0` |
 
 ---
 
@@ -264,6 +288,7 @@ Search is via query param: `GET /notes?q=dbt`
 - At minimum: test create, read, update, delete, and keyword search for notes
 - Tests live in `tests/`, mirror the structure of `app/`
 - **Review `tests/conftest.py`** to understand how the test database is created empty and torn down between runs — the fixture setup there is the source of truth for test isolation
+- **`tests/test_ask.py` uses `AsyncMock` to patch `generate_answer`** — patch targets the name in the importing module (`app.routers.ask.generate_answer`), not where it's defined. `new_callable=AsyncMock` is required because the router `await`s the function. `mock_llm.assert_called_once()` verifies the LLM layer was invoked exactly once per request.
 
 ### Environment
 - Never commit secrets or `.env` files

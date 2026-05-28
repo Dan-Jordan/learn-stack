@@ -17,6 +17,7 @@ LearnStack is not a second brain or an AI agent. It is a backend application tha
 - Save technical notes with structured metadata (type, tool, topic, project)
 - Retrieve and search notes by keyword
 - Query notes by meaning via `POST /query` — semantic search using vector embeddings
+- Ask natural language questions via `POST /ask` — returns a grounded answer with source citations drawn from your own notes
 - Full CRUD via a FastAPI REST API
 - Postgres backend with pgvector extension, schema managed by Alembic migrations
 - Embeddings generated automatically on note create/update via OpenAI text-embedding API
@@ -47,7 +48,8 @@ The project serves two purposes simultaneously:
 | Migrations | Alembic |
 | Environment | Docker Compose |
 | Testing | pytest + httpx |
-| Embeddings (Phase 4) | OpenAI text-embedding API + pgvector |
+| Embeddings | OpenAI text-embedding API + pgvector |
+| LLM | Anthropic Claude (Haiku) |
 
 ---
 
@@ -68,8 +70,8 @@ Notes get vector embeddings generated and stored automatically on create/update 
 ### Phase 5 — Semantic search ✓
 `POST /query` takes a natural language question, embeds it, and returns notes ranked by meaning using pgvector cosine similarity.
 
-### Phase 6 — LLM answer generation *(current)*
-Pass retrieved notes + question to an LLM. Return a grounded answer with citations drawn from your own captured knowledge.
+### Phase 6 — LLM answer generation ✓
+`POST /ask` passes retrieved notes + question to Claude. Returns a grounded answer with citations drawn from your own captured knowledge.
 
 ### Phase 7 — Note drafting agent *(future)*
 An agent that takes raw content (a doc page, Stack Overflow answer, chat transcript) and drafts a structured note for review and import.
@@ -85,8 +87,9 @@ cd learn-stack
 
 # Copy env file and fill in credentials
 cp .env.example .env
-# Edit .env — set POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB, and OPENAI_API_KEY
+# Edit .env — set POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB, OPENAI_API_KEY, and ANTHROPIC_API_KEY
 # OPENAI_API_KEY is required for the embedding pipeline (Phase 4+)
+# ANTHROPIC_API_KEY is required for the answer generation endpoint (Phase 6+)
 
 # Start the database (first run builds the custom pgvector image — takes ~1 min)
 docker compose up db -d
