@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from app.models.note import NoteType
 
 
@@ -53,3 +53,11 @@ class AskRequest(BaseModel):
 class AskResponse(BaseModel):
     answer: str
     sources: list[NoteResponse]
+
+
+class DraftRequest(BaseModel):
+    content: str = Field(min_length=1)
+
+
+class DraftResponse(BaseModel):
+    draft: NoteCreate
