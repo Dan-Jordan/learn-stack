@@ -84,9 +84,6 @@ Built:
 - `tool_choice={"type": "tool", "name": "create_note"}` forces structured output — Claude cannot respond in prose.
 - `_DRAFT_TOOL` is module-level (not inside the function) — it's a static definition, no reason to recreate it per call.
 
-**TODO — review later:**
-- `app/agent.py` line 52: `message = await _client().messages.create(...)` — a new Anthropic client is instantiated on every call to `draft_note`. Consider extracting `_client()` to a module-level singleton (like `_client = anthropic.AsyncAnthropic()`) to avoid the overhead of recreating the client on each request. Low priority at current scale.
-
 ---
 
 ## Phase 6 — Complete ✓
@@ -285,7 +282,9 @@ Keyword search via query param: `GET /notes?q=dbt`
 |---|---|---|
 | Backend | FastAPI | latest stable |
 | Database | PostgreSQL | 15 |
+| Vector search | pgvector | 0.8.0 (compiled from source in Docker image) |
 | ORM | SQLAlchemy | 2.x (use async where possible) |
+| Migrations | Alembic | — |
 | Schemas | Pydantic | v2 |
 | Environment | Docker Compose | v2 |
 | Testing | pytest + httpx | — |
@@ -342,19 +341,30 @@ Keyword search via query param: `GET /notes?q=dbt`
 
 Decisions made during development that future work should respect.
 
-| Date | Decision | Reason |
+| Phase | Decision | Reason |
 |---|---|---|
 | Project start | UUIDs over sequential IDs | Safer for eventual API exposure; avoids enumeration |
 | Project start | Pydantic v2 | Current standard; v1 patterns are deprecated |
 | Project start | SQLAlchemy 2.x | Modern async support; cleaner query syntax |
 | Project start | note_type as enum | Keeps categorization consistent without free-form chaos |
-| Project start | tool/project/topic as plain strings in Phase 1 | Defer normalization until usage patterns are clear |
-| Project start | No frontend in Phase 1 | Swagger/ReDoc is sufficient; avoid scope creep |
-| Project start | Defer tags to Phase 2 | Start with structured fields; add free-form labels after core works |
+| Project start | tool/project/topic as plain strings | Defer normalization until usage patterns are clear |
+| Project start | No frontend | Swagger/ReDoc is sufficient; avoid scope creep |
+| Project start | Defer tags, source, confidence, status fields | Start with structured fields; add after core works and usage patterns emerge |
+| Phase 2 | All schema changes via Alembic migrations | Replaces `create_all` on startup; standard safe approach for production schema evolution |
+| Phase 3 | pgvector enabled via migration, not app startup | Keeps extension management with schema management; idempotent with `IF NOT EXISTS` |
+| Phase 3 | Custom Docker image with pgvector compiled from source | Official Postgres image doesn't include pgvector; custom Dockerfile gives full control |
+| Phase 4 | OpenAI `text-embedding-3-small` for embeddings | Industry standard; cheap at personal scale; 1536-dimension vectors |
+| Phase 4 | Re-embed only when `content` changes on update | Title/metadata edits don't change meaning; avoids unnecessary API calls |
+| Phase 4 | Embeddings generated at write time, not in batch | Keeps notes immediately searchable after create/update; acceptable latency at personal scale |
+| Phase 5 | No pgvector index (ivfflat/hnsw) | Not needed at personal-note scale; add via migration if query performance degrades |
+| Phase 5 | Cosine distance for similarity ranking | Standard for normalized text embeddings; pgvector supports it natively |
+| Phase 6 | `_client()` is a lazy function, not module-level | Prevents Anthropic SDK from reading `ANTHROPIC_API_KEY` at import time; applies to both `llm.py` and `agent.py` |
+| Phase 6 | LLM tests mock `generate_answer`, not real API calls | LLM responses are non-deterministic; mocking keeps tests fast and reliable |
+| Phase 6 | `sources` in `/ask` response = notes passed as context | Caller sees exactly what grounded the answer, not just what was retrieved |
+| Phase 7 | `tool_choice` forced to `create_note` in draft agent | Ensures structured output — Claude cannot respond in prose |
 | Phase 7 | `/draft` returns a draft, does not auto-save | Human-in-the-loop by design; keeps junk out of the RAG knowledge base |
-| Phase 7 | No URL support in Phase 7 | Paste-only keeps scope tight; URL fetching adds meaningful complexity |
-| Phase 7 | No new NoteType values in Phase 7 | Existing enum covers all current use cases |
-| Phase 7 | Job postings deferred to Phase 8 | Need a dedicated table with structured fields; forcing them into notes table loses structure |
+| Phase 7 | No URL support in draft agent | Paste-only keeps scope tight; URL fetching adds meaningful complexity |
+| Phase 7 | Job postings deferred to Phase 8 with dedicated table | Forcing them into the notes table loses structure; need company, role, status, URL fields |
 
 ---
 
@@ -371,11 +381,24 @@ Do not build these until the relevant phase is reached:
 
 ---
 
+## Follow-ups
+
+Items to revisit at no fixed deadline. Not deferred features — these are code quality, consistency, and design questions worth returning to when the system is in regular use.
+
+| Area | Item | Notes |
+|---|---|---|
+| `app/agent.py:52` | Anthropic client created on every `draft_note` call | Consider a lazy-init module-level singleton. Note: `app/llm.py` uses the same `_client()` pattern deliberately — avoid reading `ANTHROPIC_API_KEY` at import time. A lazy singleton satisfies both concerns. Low priority at current scale. |
+| `app/crud/notes.py` | No pgvector index (ivfflat/hnsw) on the `embedding` column | Not needed at personal-note scale. Add via Alembic migration if semantic search slows as the notes table grows. |
+| `app/models/note.py` | Phase 2 schema fields still unbuilt — tags, source, confidence, status | Deferred until usage patterns are clear. Revisit after the system has been in real use for a while. Requires Alembic migration + schema + CRUD updates. |
+| `app/agent.py` | URL fetching in the draft agent | `/draft` is paste-only. Future: accept a URL, fetch the content server-side, pass to the agent. Adds meaningful complexity — defer until paste workflow is well-exercised. |
+
+---
+
 ## Background on the developer
 
-The developer has 19 years of healthcare data experience with an actuarial and modeling background. Python is a growing focus, applied initially for automation. Coursera coursework in Python and pipelines. The goal is to develop backend and data engineering skills that open doors to well-paying roles in health tech and data engineering.
+The developer has 19 years of healthcare data experience with an actuarial and modeling background. Python is a growing focus, applied initially for automation. Coursera coursework in Python and pipelines. The goal is to develop backend and data engineering skills that open doors to roles in health tech and data engineering that align with his background and trajectory.
 
-The project is deliberately chosen to build skills that transfer directly to those roles: FastAPI, Postgres, Docker, SQLAlchemy, pytest, and eventually RAG/search.
+The project is deliberately chosen to build skills that transfer directly to those roles: FastAPI, Postgres, Docker, SQLAlchemy, Alembic, pytest, pgvector, LLM API integration (OpenAI, Anthropic), and RAG/semantic search.
 
 Prefer explanations that connect new concepts to the developer's existing strengths in data modeling, logic, and analytical thinking. Avoid over-scaffolding; this developer learns well by doing.
 

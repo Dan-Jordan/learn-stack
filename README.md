@@ -34,7 +34,7 @@ The project serves two purposes simultaneously:
 
 **Practical** — a real tool for capturing and retrieving what you are learning about Python, FastAPI, SQLAlchemy, dbt, Docker, Postgres, and data engineering.
 
-**Educational** — a realistic application for practicing backend development, database modeling, API design, async Python, testing, migrations, and eventually RAG and semantic search.
+**Educational** — a realistic application for practicing backend development, database modeling, API design, async Python, testing, migrations, RAG, semantic search, and LLM API integration.
 
 ---
 
@@ -42,6 +42,7 @@ The project serves two purposes simultaneously:
 
 | Layer | Tool |
 |---|---|
+| Python | 3.11+ |
 | Backend | FastAPI |
 | Database | PostgreSQL 15 |
 | ORM | SQLAlchemy 2.x (async) |
@@ -60,22 +61,22 @@ The project serves two purposes simultaneously:
 Full CRUD on technical notes. Keyword search. Postgres backend. Docker Compose. 10 passing tests.
 
 ### Phase 2 — Alembic migrations ✓
-Replaced `create_all` on startup with Alembic migration scripts. Schema changes are now versioned and safe.
+Replaced `create_all` on startup with Alembic migration scripts. Schema changes are now versioned and safe. 10 passing tests.
 
 ### Phase 3 — pgvector ✓
-Added the pgvector Postgres extension and an `embedding` column to the notes table via Alembic migration. Custom Docker image compiles pgvector from source.
+Added the pgvector Postgres extension and an `embedding` column to the notes table via Alembic migration. Custom Docker image compiles pgvector from source. 10 passing tests.
 
 ### Phase 4 — Embedding pipeline ✓
-Notes get vector embeddings generated and stored automatically on create/update using the OpenAI text-embedding API (`text-embedding-3-small`, 1536 dimensions).
+Notes get vector embeddings generated and stored automatically on create/update using the OpenAI text-embedding API (`text-embedding-3-small`, 1536 dimensions). 10 passing tests.
 
 ### Phase 5 — Semantic search ✓
-`POST /query` takes a natural language question, embeds it, and returns notes ranked by meaning using pgvector cosine similarity.
+`POST /query` takes a natural language question, embeds it, and returns notes ranked by meaning using pgvector cosine similarity. 16 passing tests (6 new).
 
 ### Phase 6 — LLM answer generation ✓
-`POST /ask` passes retrieved notes + question to Claude. Returns a grounded answer with citations drawn from your own captured knowledge.
+`POST /ask` passes retrieved notes + question to Claude. Returns a grounded answer with citations drawn from your own captured knowledge. 21 passing tests (5 new).
 
 ### Phase 7 — Note drafting agent ✓
-`POST /draft` takes raw pasted content and returns a structured note draft for review. Uses Claude tool use to extract title, content, type, and metadata. Human-in-the-loop: the draft is returned for review, not auto-saved.
+`POST /draft` takes raw pasted content and returns a structured note draft for review. Uses Claude tool use to extract title, content, type, and metadata. Human-in-the-loop: the draft is returned for review, not auto-saved. 27 passing tests (6 new).
 
 ---
 
@@ -132,8 +133,8 @@ pytest
 
 ---
 
-## Development philosophy
+## Inspiration
 
-Build in small, working increments. Each phase produces something usable before the next begins.
+This project was inspired by Andrej Karpathy's [LLM Wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) concept — the idea of a persistent, AI-maintained personal knowledge base where knowledge compounds over time rather than scattering across chat history. The YouTube video [*Build An AI Second Brain Knowledge Base (Step-By-Step)*](https://www.youtube.com/watch?v=yke4fLQUsh4) helped bring that concept into focus.
 
-Avoid over-engineering. If a feature does not help capture or retrieve learning, defer it.
+The architecture here takes a different approach: rather than an LLM-maintained wiki, LearnStack is a RAG system — you write the notes, they get embedded, and the system retrieves and answers from what you actually captured. The implementation is my own, built incrementally over seven phases as a learning exercise in FastAPI, Postgres, pgvector, and LLM API integration.
