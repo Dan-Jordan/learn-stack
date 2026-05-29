@@ -2,13 +2,10 @@
 type: error_fix
 
 tool: pytest, Docker
-# optional — e.g. SQLAlchemy, FastAPI, Docker, pytest
 
 topic: testing, setup
-# optional — e.g. ORM, routing, async, containers
 
 project: learnstack
-# optional — omit if not project-specific
 ---
 
 # Test suite fails on fresh start — test database must be created manually
