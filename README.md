@@ -18,6 +18,7 @@ LearnStack is not a second brain or an AI agent. It is a backend application tha
 - Retrieve and search notes by keyword
 - Query notes by meaning via `POST /query` — semantic search using vector embeddings
 - Ask natural language questions via `POST /ask` — returns a grounded answer with source citations drawn from your own notes
+- Draft structured notes from raw pasted content via `POST /draft` — paste a doc, Stack Overflow answer, or any text and get a structured note back for review
 - Full CRUD via a FastAPI REST API
 - Postgres backend with pgvector extension, schema managed by Alembic migrations
 - Embeddings generated automatically on note create/update via OpenAI text-embedding API
@@ -73,8 +74,8 @@ Notes get vector embeddings generated and stored automatically on create/update 
 ### Phase 6 — LLM answer generation ✓
 `POST /ask` passes retrieved notes + question to Claude. Returns a grounded answer with citations drawn from your own captured knowledge.
 
-### Phase 7 — Note drafting agent *(future)*
-An agent that takes raw content (a doc page, Stack Overflow answer, chat transcript) and drafts a structured note for review and import.
+### Phase 7 — Note drafting agent ✓
+`POST /draft` takes raw pasted content and returns a structured note draft for review. Uses Claude tool use to extract title, content, type, and metadata. Human-in-the-loop: the draft is returned for review, not auto-saved.
 
 ---
 
@@ -89,7 +90,7 @@ cd learn-stack
 cp .env.example .env
 # Edit .env — set POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB, OPENAI_API_KEY, and ANTHROPIC_API_KEY
 # OPENAI_API_KEY is required for the embedding pipeline (Phase 4+)
-# ANTHROPIC_API_KEY is required for the answer generation endpoint (Phase 6+)
+# ANTHROPIC_API_KEY is required for answer generation (POST /ask) and note drafting (POST /draft)
 
 # Start the database (first run builds the custom pgvector image — takes ~1 min)
 docker compose up db -d

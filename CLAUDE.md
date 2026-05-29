@@ -42,9 +42,9 @@ When working on Phase 1–3, keep the RAG architecture in mind even when not bui
 
 ## Current phase
 
-**Phase 6 — Complete ✓**
+**Phase 7 — Complete ✓**
 
-Phases 1–6 are complete. The full RAG pipeline is working: notes are stored, embedded, retrieved semantically, and answered by Claude with source citations. Phase 7 is next.
+Phases 1–7 are complete. The notes agent is working: raw pasted content is drafted into a structured note via `POST /draft`, ready for review and manual save.
 
 ---
 
@@ -59,7 +59,33 @@ Phases 1–6 are complete. The full RAG pipeline is working: notes are stored, e
 
 **Embedding model:** OpenAI text-embedding API (industry standard, fractions of a cent per note for personal use).
 
-**Deferred to Phase 7:** An agent that drafts notes from raw content (paste in a doc or Stack Overflow answer, get a structured note back).
+**Deferred to Phase 7 (now complete):** An agent that drafts notes from raw content (paste in a doc or Stack Overflow answer, get a structured note back).
+
+**Deferred to Phase 8:** Job postings — a separate table with structured fields (company, role, status, URL). Not stored in the notes table.
+
+---
+
+## Phase 7 — Complete ✓
+
+**Goal:** `POST /draft` accepts raw pasted content and returns a structured `NoteCreate` draft for review. The user then saves it manually via `POST /notes`. ✓
+
+Built:
+- [x] `app/agent.py` — async Anthropic client, `draft_note(raw_content)` uses Claude tool use with `tool_choice` forced to `create_note`, returns a `NoteCreate`
+- [x] `DraftRequest` and `DraftResponse` schemas added to `app/schemas/note.py`
+- [x] `app/routers/draft.py` — `POST /draft` endpoint: raw content → agent → draft note
+- [x] `app/main.py` — draft router registered
+- [x] `tests/test_draft.py` — 6 tests using `AsyncMock` to patch `draft_note`
+
+**Design decisions:**
+- No URL support in Phase 7 — paste-only. URL fetching deferred to a later phase.
+- No new `NoteType` values added — existing enum covers all current use cases.
+- Job postings deferred to Phase 8 with a dedicated table.
+- Human-in-the-loop by design: `/draft` returns a draft, does not auto-save. The user reviews before calling `POST /notes`.
+- `tool_choice={"type": "tool", "name": "create_note"}` forces structured output — Claude cannot respond in prose.
+- `_DRAFT_TOOL` is module-level (not inside the function) — it's a static definition, no reason to recreate it per call.
+
+**TODO — review later:**
+- `app/agent.py` line 52: `message = await _client().messages.create(...)` — a new Anthropic client is instantiated on every call to `draft_note`. Consider extracting `_client()` to a module-level singleton (like `_client = anthropic.AsyncAnthropic()`) to avoid the overhead of recreating the client on each request. Low priority at current scale.
 
 ---
 
@@ -163,28 +189,42 @@ Built:
 
 ## Repository structure
 
-Files marked `[planned]` are specified but not yet created.
-
 ```
 learnstack/
 ├── app/
-│   ├── main.py              # FastAPI app entry point  [planned]
-│   ├── database.py          # SQLAlchemy engine and session
-│   ├── models/              # SQLAlchemy ORM models
-│   │   └── note.py          # Note ORM model and NoteType enum
-│   ├── schemas/             # Pydantic request/response schemas
-│   │   └── note.py          # NoteCreate, NoteUpdate, NoteResponse
-│   ├── routers/             # FastAPI route handlers  [planned]
-│   │   └── notes.py
-│   └── crud/                # Database operations (separate from routing)  [planned]
-│       └── notes.py
-├── tests/                   # [planned]
-│   └── test_notes.py
+│   ├── main.py              # FastAPI app entry point — registers all routers
+│   ├── database.py          # SQLAlchemy async engine and session
+│   ├── embeddings.py        # OpenAI embedding helper (text-embedding-3-small)
+│   ├── llm.py               # Anthropic client — generate_answer() for /ask
+│   ├── agent.py             # Anthropic client — draft_note() for /draft
+│   ├── models/
+│   │   └── note.py          # Note ORM model, NoteType enum, embedding column
+│   ├── schemas/
+│   │   └── note.py          # All Pydantic schemas: NoteCreate, NoteUpdate, NoteResponse,
+│   │                        #   QueryRequest, QueryResult, AskRequest, AskResponse,
+│   │                        #   DraftRequest, DraftResponse
+│   ├── routers/
+│   │   ├── notes.py         # CRUD endpoints
+│   │   ├── query.py         # POST /query — semantic search
+│   │   ├── ask.py           # POST /ask — RAG answer generation
+│   │   └── draft.py         # POST /draft — notes agent
+│   └── crud/
+│       └── notes.py         # Database operations: create, read, update, delete, search
+├── tests/
+│   ├── conftest.py          # Test database setup and teardown fixture
+│   ├── test_notes.py        # 10 tests — CRUD and keyword search
+│   ├── test_query.py        # 6 tests — semantic search
+│   ├── test_ask.py          # 5 tests — RAG answer endpoint
+│   └── test_draft.py        # 6 tests — notes agent endpoint
+├── alembic/                 # Migration scripts
+│   ├── env.py
+│   └── versions/
 ├── notes-inbox/             # Markdown notes awaiting API import
 │   └── _template.md
 ├── import_notes.py          # Batch import script (posts inbox files to API)
-├── docker-compose.yml       # PostgreSQL 15 service (no app service yet)
-├── Dockerfile               # [planned]
+├── docker-compose.yml       # PostgreSQL 15 service with pgvector
+├── Dockerfile               # Custom pgvector image (pgvector compiled from source)
+├── alembic.ini
 ├── requirements.txt
 ├── .env.example
 ├── README.md
@@ -233,6 +273,7 @@ learnstack/
 | DELETE | `/notes/{id}` | Delete a note |
 | POST | `/query` | Semantic search — returns notes ranked by meaning with scores |
 | POST | `/ask` | RAG answer — returns a grounded answer + source notes |
+| POST | `/draft` | Notes agent — returns a structured draft note from raw pasted content |
 
 Keyword search via query param: `GET /notes?q=dbt`
 
@@ -288,7 +329,7 @@ Keyword search via query param: `GET /notes?q=dbt`
 - At minimum: test create, read, update, delete, and keyword search for notes
 - Tests live in `tests/`, mirror the structure of `app/`
 - **Review `tests/conftest.py`** to understand how the test database is created empty and torn down between runs — the fixture setup there is the source of truth for test isolation
-- **`tests/test_ask.py` uses `AsyncMock` to patch `generate_answer`** — patch targets the name in the importing module (`app.routers.ask.generate_answer`), not where it's defined. `new_callable=AsyncMock` is required because the router `await`s the function. `mock_llm.assert_called_once()` verifies the LLM layer was invoked exactly once per request.
+- **`tests/test_ask.py` and `tests/test_draft.py` use `AsyncMock`** — patch targets the name in the importing module (`app.routers.ask.generate_answer`, `app.routers.draft.draft_note`), not where it's defined. `new_callable=AsyncMock` is required because the router `await`s the function. `mock.assert_called_once()` verifies the layer was invoked exactly once per request.
 
 ### Environment
 - Never commit secrets or `.env` files
@@ -310,6 +351,10 @@ Decisions made during development that future work should respect.
 | Project start | tool/project/topic as plain strings in Phase 1 | Defer normalization until usage patterns are clear |
 | Project start | No frontend in Phase 1 | Swagger/ReDoc is sufficient; avoid scope creep |
 | Project start | Defer tags to Phase 2 | Start with structured fields; add free-form labels after core works |
+| Phase 7 | `/draft` returns a draft, does not auto-save | Human-in-the-loop by design; keeps junk out of the RAG knowledge base |
+| Phase 7 | No URL support in Phase 7 | Paste-only keeps scope tight; URL fetching adds meaningful complexity |
+| Phase 7 | No new NoteType values in Phase 7 | Existing enum covers all current use cases |
+| Phase 7 | Job postings deferred to Phase 8 | Need a dedicated table with structured fields; forcing them into notes table loses structure |
 
 ---
 
@@ -317,11 +362,9 @@ Decisions made during development that future work should respect.
 
 Do not build these until the relevant phase is reached:
 
-- Embeddings and vector search (Phase 4)
-- Job postings and application tracking (Phase 5)
-- AI-assisted learning session workflow (Phase 6)
+- Job postings and application tracking (Phase 8) — separate table, not stored in notes
+- URL fetching in the draft agent — paste-only for now; defer to a later phase
 - Frontend (any phase, as needed)
-- Alembic migrations (Phase 2, once schema is stable enough)
 - Multi-user support (not planned)
 - Cloud deployment (not planned in near term)
 - CRM or journaling (out of scope entirely)
