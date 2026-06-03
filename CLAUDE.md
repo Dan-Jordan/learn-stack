@@ -358,7 +358,7 @@ Decisions made during development that future work should respect.
 | Phase 4 | Embeddings generated at write time, not in batch | Keeps notes immediately searchable after create/update; acceptable latency at personal scale |
 | Phase 5 | No pgvector index (ivfflat/hnsw) | Not needed at personal-note scale; add via migration if query performance degrades |
 | Phase 5 | Cosine distance for similarity ranking | Standard for normalized text embeddings; pgvector supports it natively |
-| Phase 6 | `_client()` is a lazy function, not module-level | Prevents Anthropic SDK from reading `ANTHROPIC_API_KEY` at import time; applies to both `llm.py` and `agent.py` |
+| Phase 6 | `_client()` is a lazy function, not module-level | Prevents SDK from reading API keys at import time; applies to `llm.py`, `agent.py`, and `embeddings.py` |
 | Phase 6 | LLM tests mock `generate_answer`, not real API calls | LLM responses are non-deterministic; mocking keeps tests fast and reliable |
 | Phase 6 | `sources` in `/ask` response = notes passed as context | Caller sees exactly what grounded the answer, not just what was retrieved |
 | Phase 7 | `tool_choice` forced to `create_note` in draft agent | Ensures structured output — Claude cannot respond in prose |
@@ -387,7 +387,7 @@ Items to revisit at no fixed deadline. Not deferred features — these are code 
 
 | Area | Item | Notes |
 |---|---|---|
-| `app/agent.py:52` | Anthropic client created on every `draft_note` call | Consider a lazy-init module-level singleton. Note: `app/llm.py` uses the same `_client()` pattern deliberately — avoid reading `ANTHROPIC_API_KEY` at import time. A lazy singleton satisfies both concerns. Low priority at current scale. |
+| `app/agent.py`, `app/llm.py`, `app/embeddings.py` | New API client created on every call | All three use `_client()` to defer SDK initialization. A lazy-init module-level singleton would satisfy both concerns (deferred init + reuse). Low priority at current scale. |
 | `app/crud/notes.py` | No pgvector index (ivfflat/hnsw) on the `embedding` column | Not needed at personal-note scale. Add via Alembic migration if semantic search slows as the notes table grows. |
 | `app/models/note.py` | Phase 2 schema fields still unbuilt — tags, source, confidence, status | Deferred until usage patterns are clear. Revisit after the system has been in real use for a while. Requires Alembic migration + schema + CRUD updates. |
 | `app/agent.py` | URL fetching in the draft agent | `/draft` is paste-only. Future: accept a URL, fetch the content server-side, pass to the agent. Adds meaningful complexity — defer until paste workflow is well-exercised. |
