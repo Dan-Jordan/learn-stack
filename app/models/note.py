@@ -35,4 +35,5 @@ class Note(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
+    # nullable=True because this column was added via migration to a table with pre-existing rows.
     embedding: Mapped[list[float] | None] = mapped_column(Vector(1536), nullable=True)

@@ -80,4 +80,5 @@ async def search_notes_semantic(
         .limit(limit)
     )
     rows = (await db.execute(stmt)).all()
+    # cosine_distance returns 0 (identical) to 2 (opposite); subtract from 1 to get similarity score.
     return [(note, 1 - distance) for note, distance in rows]

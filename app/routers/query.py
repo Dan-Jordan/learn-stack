@@ -10,6 +10,8 @@ router = APIRouter(prefix="/query", tags=["query"])
 @router.post("", response_model=list[QueryResult])
 async def semantic_query(req: QueryRequest, db: AsyncSession = Depends(get_db)):
     results = await notes_crud.search_notes_semantic(db, req.q, req.limit)
+    # NoteResponse.model_validate handles ORM→Pydantic (from_attributes); score comes from the
+    # query tuple, not the ORM object, so it can't be validated from attributes in one step.
     return [
         QueryResult(**NoteResponse.model_validate(note).model_dump(), score=score)
         for note, score in results
