@@ -3,6 +3,7 @@ from anthropic import AsyncAnthropic
 
 
 def _client() -> AsyncAnthropic:
+    # Function (not module-level) so the SDK doesn't read ANTHROPIC_API_KEY at import time.
     return AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
 
