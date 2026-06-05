@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LearnStack</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #0f1117;
+      --surface:  #1a1d27;
+      --border:   #2e3147;
+      --accent:   #6c8ef7;
+      --accent2:  #5cd08a;
+      --danger:   #e05c5c;
+      --text:     #d4d8f0;
+      --muted:    #6b7190;
+      --radius:   8px;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      font-size: 14px;
+      line-height: 1.6;
+      min-height: 100vh;
+    }
+
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 14px 24px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    header h1 { font-size: 18px; font-weight: 700; letter-spacing: .5px; color: var(--accent); }
+    header span { font-size: 12px; color: var(--muted); }
+
+    nav {
+      display: flex;
+      gap: 2px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0 24px;
+    }
+    nav button {
+      background: none;
+      border: none;
+      color: var(--muted);
+      padding: 10px 16px;
+      cursor: pointer;
+      font-size: 13px;
+      border-bottom: 2px solid transparent;
+      transition: color .15s, border-color .15s;
+    }
+    nav button:hover { color: var(--text); }
+    nav button.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+    main { max-width: 900px; margin: 0 auto; padding: 28px 24px; }
+
+    .tab { display: none; }
+    .tab.active { display: block; }
+
+    h2 { font-size: 16px; font-weight: 600; margin-bottom: 16px; }
+    h3 { font-size: 14px; font-weight: 600; }
+
+    label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; margin-top: 12px; }
+    label:first-child { margin-top: 0; }
+
+    input, textarea, select {
+      width: 100%;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--text);
+      padding: 8px 10px;
+      font-size: 13px;
+      font-family: inherit;
+      outline: none;
+      transition: border-color .15s;
+    }
+    input:focus, textarea:focus, select:focus { border-color: var(--accent); }
+    select option { background: var(--surface); }
+    textarea { resize: vertical; min-height: 120px; }
+
+    button.btn {
+      border: none;
+      border-radius: var(--radius);
+      padding: 8px 18px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity .15s;
+    }
+    button.btn:hover { opacity: .85; }
+    button.btn:disabled { opacity: .4; cursor: default; }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-success { background: var(--accent2); color: #000; }
+    .btn-danger  { background: transparent; border: 1px solid var(--danger); color: var(--danger); padding: 5px 12px; font-size: 12px; }
+    .btn-ghost   { background: transparent; border: 1px solid var(--border); color: var(--text); }
+
+    .row { display: flex; gap: 10px; align-items: flex-end; }
+    .row > * { flex: 1; }
+    .row > button { flex: 0 0 auto; }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+      margin-bottom: 10px;
+    }
+
+    .note-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+    .note-title { font-weight: 600; font-size: 14px; cursor: pointer; }
+    .note-title:hover { color: var(--accent); }
+    .note-meta { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+    .badge {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 20px;
+      background: var(--border);
+      color: var(--muted);
+    }
+    .badge.type { background: #1e2a4a; color: var(--accent); }
+
+    .note-body { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 12px; display: none; }
+    .note-body.open { display: block; }
+    .note-body pre {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 12px;
+      overflow-x: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-family: 'Cascadia Code', 'Consolas', monospace;
+      font-size: 12px;
+      color: var(--text);
+      margin-top: 8px;
+    }
+
+    .answer-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--accent2);
+      border-radius: var(--radius);
+      padding: 16px;
+      margin-bottom: 16px;
+      white-space: pre-wrap;
+      line-height: 1.7;
+    }
+
+    .score-bar {
+      height: 3px;
+      background: var(--border);
+      border-radius: 2px;
+      margin-top: 6px;
+    }
+    .score-fill { height: 100%; background: var(--accent); border-radius: 2px; }
+
+    .status {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 8px;
+      min-height: 18px;
+    }
+    .status.ok  { color: var(--accent2); }
+    .status.err { color: var(--danger); }
+
+    .spinner {
+      display: inline-block;
+      width: 12px; height: 12px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin .6s linear infinite;
+      vertical-align: middle;
+      margin-right: 6px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .divider { border: none; border-top: 1px solid var(--border); margin: 20px 0; }
+
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    @media (max-width: 600px) { .two-col { grid-template-columns: 1fr; } }
+
+    #draft-form { display: none; }
+    #draft-form.visible { display: block; }
+
+    .sources-label { font-size: 12px; color: var(--muted); margin-bottom: 8px; font-weight: 600; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>LearnStack</h1>
+  <span>personal knowledge system</span>
+</header>
+
+<nav>
+  <button class="active" data-tab="draft">Draft &amp; Save</button>
+  <button data-tab="notes">Notes</button>
+  <button data-tab="ask">Ask</button>
+  <button data-tab="query">Semantic Search</button>
+</nav>
+
+<main>
+
+  <!-- ── DRAFT & SAVE ─────────────────────────────────────── -->
+  <section id="tab-draft" class="tab active">
+    <h2>Draft a note from raw content</h2>
+    <p style="color:var(--muted);font-size:13px;margin-bottom:16px;">
+      Paste any raw text — docs, Stack Overflow answers, error messages, code snippets.
+      The agent will structure it into a note. Review and edit before saving.
+    </p>
+
+    <label>Raw content</label>
+    <textarea id="raw-content" placeholder="Paste your raw content here…" style="min-height:160px;"></textarea>
+
+    <div style="display:flex;gap:10px;margin-top:12px;align-items:center;">
+      <button class="btn btn-primary" id="btn-draft">Draft Note</button>
+      <div class="status" id="draft-status"></div>
+    </div>
+
+    <hr class="divider" />
+
+    <div id="draft-form">
+      <h2>Review &amp; edit draft</h2>
+
+      <label>Title</label>
+      <input type="text" id="f-title" placeholder="Note title" />
+
+      <label>Content (Markdown)</label>
+      <textarea id="f-content" style="min-height:200px;" placeholder="Note content…"></textarea>
+
+      <div class="two-col">
+        <div>
+          <label>Note type</label>
+          <select id="f-type">
+            <option value="technical_note">technical_note</option>
+            <option value="command">command</option>
+            <option value="error_fix">error_fix</option>
+            <option value="project_note">project_note</option>
+            <option value="concept">concept</option>
+            <option value="question">question</option>
+          </select>
+        </div>
+        <div>
+          <label>Tool</label>
+          <input type="text" id="f-tool" placeholder="e.g. dbt, Docker, SQLAlchemy" />
+        </div>
+      </div>
+
+      <div class="two-col">
+        <div>
+          <label>Topic</label>
+          <input type="text" id="f-topic" placeholder="e.g. CI/CD, testing" />
+        </div>
+        <div>
+          <label>Project</label>
+          <input type="text" id="f-project" placeholder="e.g. healthcare_claims_dbt" />
+        </div>
+      </div>
+
+      <div style="display:flex;gap:10px;margin-top:16px;align-items:center;">
+        <button class="btn btn-success" id="btn-save">Save Note</button>
+        <button class="btn btn-ghost" id="btn-clear">Clear</button>
+        <div class="status" id="save-status"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── NOTES ────────────────────────────────────────────── -->
+  <section id="tab-notes" class="tab">
+    <h2>Notes</h2>
+
+    <div class="row" style="margin-bottom:16px;">
+      <input type="text" id="notes-search" placeholder="Keyword search…" />
+      <button class="btn btn-primary" id="btn-search">Search</button>
+      <button class="btn btn-ghost" id="btn-all">All</button>
+    </div>
+
+    <div id="notes-status" class="status"></div>
+    <div id="notes-list"></div>
+  </section>
+
+  <!-- ── ASK ──────────────────────────────────────────────── -->
+  <section id="tab-ask" class="tab">
+    <h2>Ask a question</h2>
+    <p style="color:var(--muted);font-size:13px;margin-bottom:16px;">
+      Ask anything — the system retrieves your most relevant notes and generates a grounded answer.
+    </p>
+
+    <div class="row">
+      <input type="text" id="ask-q" placeholder="e.g. What errors have I hit with SQLAlchemy?" />
+      <button class="btn btn-primary" id="btn-ask">Ask</button>
+    </div>
+
+    <div class="status" id="ask-status" style="margin-top:8px;"></div>
+    <div id="ask-result" style="margin-top:16px;"></div>
+  </section>
+
+  <!-- ── SEMANTIC SEARCH ──────────────────────────────────── -->
+  <section id="tab-query" class="tab">
+    <h2>Semantic search</h2>
+    <p style="color:var(--muted);font-size:13px;margin-bottom:16px;">
+      Find notes by meaning, not just keywords. Returns notes ranked by cosine similarity to your query.
+    </p>
+
+    <div class="row">
+      <input type="text" id="query-q" placeholder="e.g. async database sessions" />
+      <button class="btn btn-primary" id="btn-query">Search</button>
+    </div>
+
+    <div class="status" id="query-status" style="margin-top:8px;"></div>
+    <div id="query-result" style="margin-top:16px;"></div>
+  </section>
+
+</main>
+
+<script>
+  // ── Tab navigation ─────────────────────────────────────────
+  document.querySelectorAll('nav button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+    });
+  });
+
+  // ── Helpers ────────────────────────────────────────────────
+  function setStatus(el, msg, kind) {
+    el.className = 'status ' + (kind || '');
+    el.innerHTML = msg;
+  }
+
+  function spin(el) {
+    el.innerHTML = '<span class="spinner"></span>Working…';
+    el.className = 'status';
+  }
+
+  async function apiFetch(path, opts) {
+    const r = await fetch(path, {
+      headers: { 'Content-Type': 'application/json' },
+      ...opts,
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({ detail: r.statusText }));
+      throw new Error(err.detail || r.statusText);
+    }
+    return r.status === 204 ? null : r.json();
+  }
+
+  function noteTypeBadge(t) {
+    return `<span class="badge type">${t.replace(/_/g, ' ')}</span>`;
+  }
+
+  function metaBadge(label, val) {
+    return val ? `<span class="badge" title="${label}">${val}</span>` : '';
+  }
+
+  function renderNoteCard(note, opts = {}) {
+    const id = note.id;
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.dataset.noteId = id;
+
+    let scoreHtml = '';
+    if (opts.score !== undefined) {
+      const pct = Math.round(opts.score * 100);
+      scoreHtml = `
+        <div style="margin-top:6px;">
+          <span style="font-size:11px;color:var(--muted);">similarity ${pct}%</span>
+          <div class="score-bar"><div class="score-fill" style="width:${pct}%"></div></div>
+        </div>`;
+    }
+
+    card.innerHTML = `
+      <div class="note-header">
+        <div style="flex:1">
+          <div class="note-title">${escHtml(note.title)}</div>
+          <div class="note-meta">
+            ${noteTypeBadge(note.note_type)}
+            ${metaBadge('tool', note.tool)}
+            ${metaBadge('topic', note.topic)}
+            ${metaBadge('project', note.project)}
+          </div>
+          ${scoreHtml}
+        </div>
+        ${opts.deletable !== false ? `<button class="btn btn-danger btn-delete" data-id="${id}">Delete</button>` : ''}
+      </div>
+      <div class="note-body" id="body-${id}">
+        <pre>${escHtml(note.content)}</pre>
+        <div style="margin-top:8px;font-size:11px;color:var(--muted);">
+          Created ${fmtDate(note.created_at)} · Updated ${fmtDate(note.updated_at)}
+        </div>
+      </div>`;
+
+    card.querySelector('.note-title').addEventListener('click', () => {
+      const body = card.querySelector('.note-body');
+      body.classList.toggle('open');
+    });
+
+    if (opts.deletable !== false) {
+      card.querySelector('.btn-delete').addEventListener('click', async () => {
+        if (!confirm('Delete this note?')) return;
+        try {
+          await apiFetch('/notes/' + id, { method: 'DELETE' });
+          card.remove();
+        } catch (e) {
+          alert('Delete failed: ' + e.message);
+        }
+      });
+    }
+
+    return card;
+  }
+
+  function escHtml(s) {
+    return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  function fmtDate(iso) {
+    return new Date(iso).toLocaleString();
+  }
+
+  // ── Draft & Save ───────────────────────────────────────────
+  const draftForm = document.getElementById('draft-form');
+  const draftStatus = document.getElementById('draft-status');
+  const saveStatus = document.getElementById('save-status');
+
+  document.getElementById('btn-draft').addEventListener('click', async () => {
+    const raw = document.getElementById('raw-content').value.trim();
+    if (!raw) { setStatus(draftStatus, 'Paste some content first.', 'err'); return; }
+
+    spin(draftStatus);
+    document.getElementById('btn-draft').disabled = true;
+
+    try {
+      const data = await apiFetch('/draft', {
+        method: 'POST',
+        body: JSON.stringify({ content: raw }),
+      });
+      const d = data.draft;
+      document.getElementById('f-title').value   = d.title   ?? '';
+      document.getElementById('f-content').value = d.content ?? '';
+      document.getElementById('f-type').value    = d.note_type ?? 'technical_note';
+      document.getElementById('f-tool').value    = d.tool    ?? '';
+      document.getElementById('f-topic').value   = d.topic   ?? '';
+      document.getElementById('f-project').value = d.project ?? '';
+      draftForm.classList.add('visible');
+      setStatus(draftStatus, 'Draft ready. Review and save.', 'ok');
+    } catch (e) {
+      setStatus(draftStatus, 'Error: ' + e.message, 'err');
+    } finally {
+      document.getElementById('btn-draft').disabled = false;
+    }
+  });
+
+  document.getElementById('btn-save').addEventListener('click', async () => {
+    const title   = document.getElementById('f-title').value.trim();
+    const content = document.getElementById('f-content').value.trim();
+    if (!title || !content) { setStatus(saveStatus, 'Title and content are required.', 'err'); return; }
+
+    spin(saveStatus);
+    document.getElementById('btn-save').disabled = true;
+
+    const payload = {
+      title,
+      content,
+      note_type: document.getElementById('f-type').value,
+      tool:    document.getElementById('f-tool').value.trim()    || null,
+      topic:   document.getElementById('f-topic').value.trim()   || null,
+      project: document.getElementById('f-project').value.trim() || null,
+    };
+
+    try {
+      await apiFetch('/notes', { method: 'POST', body: JSON.stringify(payload) });
+      setStatus(saveStatus, 'Note saved.', 'ok');
+      clearDraftForm();
+    } catch (e) {
+      setStatus(saveStatus, 'Error: ' + e.message, 'err');
+    } finally {
+      document.getElementById('btn-save').disabled = false;
+    }
+  });
+
+  document.getElementById('btn-clear').addEventListener('click', () => {
+    clearDraftForm();
+    document.getElementById('raw-content').value = '';
+    setStatus(draftStatus, '', '');
+  });
+
+  function clearDraftForm() {
+    ['f-title','f-content','f-tool','f-topic','f-project'].forEach(id => {
+      document.getElementById(id).value = '';
+    });
+    document.getElementById('f-type').value = 'technical_note';
+    draftForm.classList.remove('visible');
+    setStatus(saveStatus, '', '');
+  }
+
+  // ── Notes list ─────────────────────────────────────────────
+  async function loadNotes(q) {
+    const statusEl = document.getElementById('notes-status');
+    const listEl   = document.getElementById('notes-list');
+    spin(statusEl);
+    listEl.innerHTML = '';
+
+    try {
+      const url = q ? `/notes?q=${encodeURIComponent(q)}&limit=100` : '/notes?limit=100';
+      const notes = await apiFetch(url);
+      setStatus(statusEl, `${notes.length} note${notes.length !== 1 ? 's' : ''}`, '');
+      if (!notes.length) { statusEl.textContent = 'No notes found.'; return; }
+      notes.forEach(n => listEl.appendChild(renderNoteCard(n)));
+    } catch (e) {
+      setStatus(statusEl, 'Error: ' + e.message, 'err');
+    }
+  }
+
+  document.getElementById('btn-search').addEventListener('click', () => {
+    loadNotes(document.getElementById('notes-search').value.trim());
+  });
+  document.getElementById('btn-all').addEventListener('click', () => {
+    document.getElementById('notes-search').value = '';
+    loadNotes('');
+  });
+  document.getElementById('notes-search').addEventListener('keydown', e => {
+    if (e.key === 'Enter') loadNotes(e.target.value.trim());
+  });
+
+  // Load notes when the Notes tab is first opened
+  document.querySelector('[data-tab="notes"]').addEventListener('click', () => {
+    if (!document.getElementById('notes-list').children.length) loadNotes('');
+  });
+
+  // ── Ask ────────────────────────────────────────────────────
+  document.getElementById('btn-ask').addEventListener('click', async () => {
+    const q = document.getElementById('ask-q').value.trim();
+    if (!q) return;
+
+    const statusEl = document.getElementById('ask-status');
+    const resultEl = document.getElementById('ask-result');
+    spin(statusEl);
+    resultEl.innerHTML = '';
+    document.getElementById('btn-ask').disabled = true;
+
+    try {
+      const data = await apiFetch('/ask', { method: 'POST', body: JSON.stringify({ q }) });
+      setStatus(statusEl, '', '');
+
+      const answerDiv = document.createElement('div');
+      answerDiv.className = 'answer-box';
+      answerDiv.textContent = data.answer;
+      resultEl.appendChild(answerDiv);
+
+      if (data.sources && data.sources.length) {
+        const label = document.createElement('div');
+        label.className = 'sources-label';
+        label.textContent = `Sources (${data.sources.length})`;
+        resultEl.appendChild(label);
+        data.sources.forEach(n => resultEl.appendChild(renderNoteCard(n, { deletable: false })));
+      }
+    } catch (e) {
+      setStatus(statusEl, 'Error: ' + e.message, 'err');
+    } finally {
+      document.getElementById('btn-ask').disabled = false;
+    }
+  });
+
+  document.getElementById('ask-q').addEventListener('keydown', e => {
+    if (e.key === 'Enter') document.getElementById('btn-ask').click();
+  });
+
+  // ── Semantic search ────────────────────────────────────────
+  document.getElementById('btn-query').addEventListener('click', async () => {
+    const q = document.getElementById('query-q').value.trim();
+    if (!q) return;
+
+    const statusEl = document.getElementById('query-status');
+    const resultEl = document.getElementById('query-result');
+    spin(statusEl);
+    resultEl.innerHTML = '';
+    document.getElementById('btn-query').disabled = true;
+
+    try {
+      const results = await apiFetch('/query', { method: 'POST', body: JSON.stringify({ q }) });
+      setStatus(statusEl, `${results.length} result${results.length !== 1 ? 's' : ''}`, '');
+      results.forEach(r => resultEl.appendChild(renderNoteCard(r, { score: r.score, deletable: false })));
+    } catch (e) {
+      setStatus(statusEl, 'Error: ' + e.message, 'err');
+    } finally {
+      document.getElementById('btn-query').disabled = false;
+    }
+  });
+
+  document.getElementById('query-q').addEventListener('keydown', e => {
+    if (e.key === 'Enter') document.getElementById('btn-query').click();
+  });
+</script>
+</body>
+</html>
