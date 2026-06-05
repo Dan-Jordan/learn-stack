@@ -16,3 +16,6 @@ build/
 
 # Notes inbox — keep the folder structure but not imported notes
 notes-inbox/processed/
+
+# Local
+NOTES.md
