@@ -42,9 +42,9 @@ When working on Phase 1–3, keep the RAG architecture in mind even when not bui
 
 ## Current phase
 
-**Phase 7 — Complete ✓**
+**Phase 8 — Complete ✓**
 
-Phases 1–7 are complete. The notes agent is working: raw pasted content is drafted into a structured note via `POST /draft`, ready for review and manual save.
+Phases 1–8 are complete. A single-page web UI is served by FastAPI at `/`. All API features are accessible: draft & save, notes list/search, semantic search, and RAG-powered ask.
 
 ---
 
@@ -62,6 +62,23 @@ Phases 1–7 are complete. The notes agent is working: raw pasted content is dra
 **Deferred to Phase 7 (now complete):** An agent that drafts notes from raw content (paste in a doc or Stack Overflow answer, get a structured note back).
 
 **Deferred to Phase 8:** Job postings — a separate table with structured fields (company, role, status, URL). Not stored in the notes table.
+
+---
+
+## Phase 8 — Complete ✓
+
+**Goal:** A single-page web UI served by FastAPI at `/`. All API capabilities accessible without touching Swagger. ✓
+
+Built:
+- [x] `static/index.html` — full single-page UI: Draft & Save, Notes, Ask, Semantic Search tabs
+- [x] `app/main.py` — `StaticFiles` mount at `/static`, `GET /` returns `index.html`
+
+**Design decisions:**
+- Single HTML file, no framework, no build step — plain HTML + `fetch()` only
+- FastAPI serves the file directly via `FileResponse` — no separate server or CDN needed
+- Draft flow is two-step by design: `/draft` populates an editable form, user reviews before calling `/notes`
+- Notes list lazy-loads on first tab open, not on page load
+- Delete requires a `confirm()` dialog — one accidental click should not destroy a note
 
 ---
 
@@ -216,6 +233,8 @@ learnstack/
 ├── alembic/                 # Migration scripts
 │   ├── env.py
 │   └── versions/
+├── static/
+│   └── index.html           # Single-page web UI (Draft & Save, Notes, Ask, Semantic Search)
 ├── notes-inbox/             # Markdown notes awaiting API import
 │   └── _template.md
 ├── import_notes.py          # Batch import script (posts inbox files to API)
@@ -365,6 +384,9 @@ Decisions made during development that future work should respect.
 | Phase 7 | `/draft` returns a draft, does not auto-save | Human-in-the-loop by design; keeps junk out of the RAG knowledge base |
 | Phase 7 | No URL support in draft agent | Paste-only keeps scope tight; URL fetching adds meaningful complexity |
 | Phase 7 | Job postings deferred to Phase 8 with dedicated table | Forcing them into the notes table loses structure; need company, role, status, URL fields |
+| Phase 8 | Single HTML file, no JS framework | Keeps scope minimal; `fetch()` is sufficient for a personal tool at this scale |
+| Phase 8 | FastAPI serves the UI directly via `FileResponse` | No separate server, no new infrastructure — consistent with "start simple" principle |
+| Phase 8 | Notes list lazy-loads on first tab open | Avoids a network call on every page load; most sessions start on the Draft tab |
 
 ---
 
@@ -372,9 +394,8 @@ Decisions made during development that future work should respect.
 
 Do not build these until the relevant phase is reached:
 
-- Job postings and application tracking (Phase 8) — separate table, not stored in notes
+- Job postings and application tracking (Phase 9) — separate table, not stored in notes
 - URL fetching in the draft agent — paste-only for now; defer to a later phase
-- Frontend (any phase, as needed)
 - Multi-user support (not planned)
 - Cloud deployment (not planned in near term)
 - CRM or journaling (out of scope entirely)
