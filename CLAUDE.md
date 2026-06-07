@@ -42,9 +42,9 @@ When working on Phase 1–3, keep the RAG architecture in mind even when not bui
 
 ## Current phase
 
-**Phase 8 — Complete ✓**
+**Phase 11 — Not started**
 
-Phases 1–8 are complete. A single-page web UI is served by FastAPI at `/`. All API features are accessible: draft & save, notes list/search, semantic search, and RAG-powered ask.
+Phase 10 is complete. Phase 11 adds HTTP Basic Auth to the Render deployment so the app can be shared without being fully public.
 
 ---
 
@@ -56,12 +56,58 @@ Phases 1–8 are complete. A single-page web UI is served by FastAPI at `/`. All
 | 4 | Embedding pipeline | Notes get vector embeddings generated and stored on create/update |
 | 5 | Semantic search | `POST /query` returns notes ranked by meaning, not just keywords |
 | 6 | LLM answer generation | A question returns a grounded answer citing your own notes |
+| 9 | Setup script | `.\setup.ps1` from a clean clone brings the full stack up in one command |
+| 10 | Cloud deployment | LearnStack running on Render at a public URL |
+| 11 | Authentication | HTTP Basic Auth gates all routes; credentials set via env vars, changeable without code changes |
 
 **Embedding model:** OpenAI text-embedding API (industry standard, fractions of a cent per note for personal use).
 
 **Deferred to Phase 7 (now complete):** An agent that drafts notes from raw content (paste in a doc or Stack Overflow answer, get a structured note back).
 
 **Deferred to Phase 8:** Job postings — a separate table with structured fields (company, role, status, URL). Not stored in the notes table.
+
+---
+
+## Phase 10 — Complete ✓
+
+**Goal:** LearnStack running on Render with a managed Postgres database and a public URL. ✓
+
+Built:
+- [x] `Dockerfile.app` — Python 3.11-slim image for the FastAPI web service (separate from the local-dev Postgres `Dockerfile`)
+- [x] `app/routers/health.py` — `GET /health` returns `{"status": "ok"}`; used by Render for health checks
+- [x] `app/main.py` — health router registered
+- [x] `render.yaml` — Render config-as-code: web service (Docker, `Dockerfile.app`) + managed Postgres instance
+
+**Design decisions:**
+- Two Dockerfiles: `Dockerfile` (Postgres + pgvector, local dev only) and `Dockerfile.app` (Python/FastAPI, used by Render) — keeps concerns separate and avoids confusing the Render build
+- `render.yaml` marks all three env vars (`DATABASE_URL`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) as `sync: false` — values are set manually in the Render dashboard, never committed to the repo
+- Alembic migration (`alembic upgrade head`) is run manually via Render's Shell after the first deploy — not wired into startup, because a failed migration on startup causes the service to crash-loop
+- `Dockerfile.app` uses `python:3.11-slim` (not Alpine) — avoids common compile-time issues with async Postgres drivers (`asyncpg`)
+- Health endpoint is deliberately simple — no DB ping, no dependency checks; Render just needs an HTTP 200 to confirm the process started
+
+**Deployment steps (first deploy):**
+1. Push repo to GitHub
+2. In Render dashboard: New → Blueprint → connect repo → Render reads `render.yaml` and creates the web service and database
+3. Set env vars in Render dashboard: `DATABASE_URL` (copy from the managed DB's connection string panel), `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`
+4. After first deploy succeeds: open Render Shell → `alembic upgrade head`
+5. App is live at the Render-assigned URL
+
+---
+
+## Phase 9 — Complete ✓
+
+**Goal:** A single PowerShell script (`setup.ps1`) that automates the full local dev setup from a clean clone. One command brings the full stack up. ✓
+
+Built:
+- [x] `setup.ps1` — 7-step setup: Docker up → venv → pip install → .env copy → Alembic migrations → test DB → uvicorn dev server
+- [x] `README.md` — Getting started section rewritten to point to the script
+
+**Design decisions:**
+- Script pauses and exits after copying `.env.example` to `.env` on first run — forces the user to fill in API keys before proceeding
+- Test database creation is idempotent — `CREATE DATABASE` errors are suppressed if the DB already exists; `CREATE EXTENSION IF NOT EXISTS` is already idempotent
+- Postgres readiness is polled with `pg_isready` before running migrations — avoids a race condition on first container start
+- The script does not handle macOS/Linux — PowerShell only; a future `setup.sh` is the right approach for cross-platform support
+- `Set-StrictMode -Version Latest` and `$ErrorActionPreference = "Stop"` — fail fast on any unexpected error rather than continuing in a broken state
 
 ---
 
@@ -195,7 +241,7 @@ Built:
 - [x] Pydantic schemas: NoteCreate, NoteUpdate, NoteResponse (`app/schemas/note.py`)
 - [x] CRUD operations (`app/crud/notes.py`)
 - [x] Route handlers (`app/routers/notes.py`)
-- [x] FastAPI entry point with lifespan table creation (`app/main.py`)
+- [x] FastAPI entry point (`app/main.py`)
 - [x] Test suite — 10 tests passing (`tests/test_notes.py`)
 - [x] `notes-inbox/` note capture workflow and batch import script (`import_notes.py`)
 
@@ -221,7 +267,8 @@ learnstack/
 │   │   ├── notes.py         # CRUD endpoints
 │   │   ├── query.py         # POST /query — semantic search
 │   │   ├── ask.py           # POST /ask — RAG answer generation
-│   │   └── draft.py         # POST /draft — notes agent
+│   │   ├── draft.py         # POST /draft — notes agent
+│   │   └── health.py        # GET /health — health check for Render
 │   └── crud/
 │       └── notes.py         # Database operations: create, read, update, delete, search
 ├── tests/
@@ -238,8 +285,11 @@ learnstack/
 ├── notes-inbox/             # Markdown notes awaiting API import
 │   └── _template.md
 ├── import_notes.py          # Batch import script (posts inbox files to API)
-├── docker-compose.yml       # PostgreSQL 15 service with pgvector
-├── Dockerfile               # Custom pgvector image (pgvector compiled from source)
+├── setup.ps1                # One-command local dev setup (Windows PowerShell)
+├── render.yaml              # Render config-as-code: web service + managed Postgres
+├── docker-compose.yml       # PostgreSQL 15 service with pgvector (local dev only)
+├── Dockerfile               # Custom pgvector image (pgvector compiled from source, local dev only)
+├── Dockerfile.app           # Python/FastAPI image (used by Render for cloud deploy)
 ├── alembic.ini
 ├── requirements.txt
 ├── .env.example
@@ -290,6 +340,7 @@ learnstack/
 | POST | `/query` | Semantic search — returns notes ranked by meaning with scores |
 | POST | `/ask` | RAG answer — returns a grounded answer + source notes |
 | POST | `/draft` | Notes agent — returns a structured draft note from raw pasted content |
+| GET | `/health` | Health check — returns `{"status": "ok"}`; used by Render |
 
 Keyword search via query param: `GET /notes?q=dbt`
 
@@ -310,6 +361,7 @@ Keyword search via query param: `GET /notes?q=dbt`
 | Python | 3.11+ | — |
 | Embeddings | OpenAI text-embedding-3-small | via `openai>=1.0.0` |
 | LLM | Anthropic Claude (Haiku) | via `anthropic>=0.25.0` |
+| Cloud | Render | Web service + managed Postgres via `render.yaml` |
 
 ---
 
@@ -367,7 +419,7 @@ Decisions made during development that future work should respect.
 | Project start | SQLAlchemy 2.x | Modern async support; cleaner query syntax |
 | Project start | note_type as enum | Keeps categorization consistent without free-form chaos |
 | Project start | tool/project/topic as plain strings | Defer normalization until usage patterns are clear |
-| Project start | No frontend | Swagger/ReDoc is sufficient; avoid scope creep |
+| Project start | No frontend (overturned in Phase 8) | Swagger/ReDoc was sufficient early on; single-page UI added in Phase 8 once core API was stable |
 | Project start | Defer tags, source, confidence, status fields | Start with structured fields; add after core works and usage patterns emerge |
 | Phase 2 | All schema changes via Alembic migrations | Replaces `create_all` on startup; standard safe approach for production schema evolution |
 | Phase 3 | pgvector enabled via migration, not app startup | Keeps extension management with schema management; idempotent with `IF NOT EXISTS` |
@@ -383,10 +435,19 @@ Decisions made during development that future work should respect.
 | Phase 7 | `tool_choice` forced to `create_note` in draft agent | Ensures structured output — Claude cannot respond in prose |
 | Phase 7 | `/draft` returns a draft, does not auto-save | Human-in-the-loop by design; keeps junk out of the RAG knowledge base |
 | Phase 7 | No URL support in draft agent | Paste-only keeps scope tight; URL fetching adds meaningful complexity |
-| Phase 7 | Job postings deferred to Phase 8 with dedicated table | Forcing them into the notes table loses structure; need company, role, status, URL fields |
+| Phase 7 | Job postings deferred to a future phase with dedicated table | Forcing them into the notes table loses structure; need company, role, status, URL fields — deferred indefinitely |
 | Phase 8 | Single HTML file, no JS framework | Keeps scope minimal; `fetch()` is sufficient for a personal tool at this scale |
 | Phase 8 | FastAPI serves the UI directly via `FileResponse` | No separate server, no new infrastructure — consistent with "start simple" principle |
 | Phase 8 | Notes list lazy-loads on first tab open | Avoids a network call on every page load; most sessions start on the Draft tab |
+| Phase 9 | Script pauses after copying `.env` on first run | Forces user to fill in API keys before migrations run — prevents silent failures |
+| Phase 9 | `pg_isready` poll before running migrations | First container start takes a few seconds; running migrations immediately causes a connection error |
+| Phase 9 | Test DB creation is idempotent — errors suppressed | Safe to re-run `setup.ps1` at any time without manual cleanup |
+| Phase 9 | PowerShell only (`setup.ps1`) | Matches the target platform (Windows); a `setup.sh` is the right future addition for macOS/Linux |
+| Phase 10 | Two Dockerfiles (`Dockerfile` and `Dockerfile.app`) | `Dockerfile` builds the Postgres+pgvector image for local dev; `Dockerfile.app` builds the Python/FastAPI image for Render — mixing them would require runtime branching |
+| Phase 10 | Alembic migration run manually after first deploy | Running migrations in the startup command causes crash-loops on failure; manual run via Render Shell is safer and explicit |
+| Phase 10 | `sync: false` on all env vars in `render.yaml` | API keys and DB connection strings must never be committed; Render dashboard is the right place to set them |
+| Phase 10 | `python:3.11-slim` not Alpine for `Dockerfile.app` | Alpine requires extra musl/gcc steps to compile `asyncpg`; slim avoids that without adding significant image size |
+| Phase 10 | Health endpoint has no DB ping | Render's health check just needs a 200; adding DB ping means a DB outage restarts the web service unnecessarily |
 
 ---
 
@@ -394,10 +455,10 @@ Decisions made during development that future work should respect.
 
 Do not build these until the relevant phase is reached:
 
-- Job postings and application tracking (Phase 9) — separate table, not stored in notes
+- Authentication (Phase 11) — HTTP Basic Auth gating all routes; credentials via env vars
+- Job postings and application tracking — separate table with dedicated fields; not stored in notes; no target phase
 - URL fetching in the draft agent — paste-only for now; defer to a later phase
 - Multi-user support (not planned)
-- Cloud deployment (not planned in near term)
 - CRM or journaling (out of scope entirely)
 
 ---

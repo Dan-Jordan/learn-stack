@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: learnstack
+    runtime: docker
+    dockerfilePath: ./Dockerfile.app
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+
+databases:
+  - name: learnstack-db
+    databaseName: learnstack
+    user: learnstack
+    plan: free

@@ -24,6 +24,7 @@ LearnStack is not a second brain or an AI agent. It is a backend application tha
 - Postgres backend with pgvector extension, schema managed by Alembic migrations
 - Embeddings generated automatically on note create/update via OpenAI text-embedding API
 - Markdown-based note capture workflow for capturing learning before the API is running
+- Deployable to Render via `render.yaml` — Docker web service + managed Postgres, one-command setup for cloud hosting
 
 ---
 
@@ -54,6 +55,7 @@ The project serves two purposes simultaneously:
 | Embeddings | OpenAI text-embedding API + pgvector |
 | LLM | Anthropic Claude (Haiku) |
 | Web UI | Plain HTML + fetch() (no framework) |
+| Cloud | Render (web service + managed Postgres) |
 
 ---
 
@@ -83,61 +85,85 @@ Notes get vector embeddings generated and stored automatically on create/update 
 ### Phase 8 — Web UI ✓
 A single-page web UI served by FastAPI at `http://localhost:8000/`. Four tabs: **Draft & Save** (paste raw content → agent structures it → review and save), **Notes** (keyword search, list, expand, delete), **Ask** (RAG-powered question answering with source citations), **Semantic Search** (cosine similarity ranking with score bars). Plain HTML + `fetch()` — no framework, no build step.
 
+### Phase 9 — Setup script ✓
+`.\setup.ps1` from a clean clone brings the full local stack up in one command: Docker → venv → pip install → `.env` → migrations → test DB → dev server.
+
+### Phase 10 — Cloud deployment ✓
+LearnStack runs on [Render](https://render.com) with a managed Postgres database. `render.yaml` defines the web service and database as code. `GET /health` supports Render's health check.
+
 ---
 
 ## Getting started
 
-```bash
-# Clone the repo
+### Prerequisites
+
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed and **running** before you run the script
+- Python 3.11+
+
+### One-command setup (Windows)
+
+```powershell
 git clone https://github.com/Dan-Jordan/learn-stack.git
 cd learn-stack
-
-# Copy env file and fill in credentials
-cp .env.example .env
-# Edit .env — set POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB, OPENAI_API_KEY, and ANTHROPIC_API_KEY
-# OPENAI_API_KEY is required for the embedding pipeline (Phase 4+)
-# ANTHROPIC_API_KEY is required for answer generation (POST /ask) and note drafting (POST /draft)
-
-# Start the database (first run builds the custom pgvector image — takes ~1 min)
-docker compose up db -d
-
-# Create a virtual environment and install dependencies
-python -m venv .venv
-.venv\Scripts\activate        # Windows
-# source .venv/bin/activate   # macOS/Linux
-pip install -r requirements.txt
-
-# Apply migrations
-alembic upgrade head
-
-# Start the API
-uvicorn app.main:app --reload
-
-# Web UI
-# http://localhost:8000/
-
-# API docs
-# http://localhost:8000/docs
+.\setup.ps1
 ```
+
+The script handles everything in order:
+
+1. Starts the Docker containers (Postgres with pgvector) — Docker Desktop must already be running
+2. Creates and activates a Python virtual environment
+3. Installs dependencies from `requirements.txt`
+4. Copies `.env.example` to `.env` if not already present — then **pauses** and prompts you to fill in your API keys before continuing
+5. Runs Alembic migrations against the database
+6. Creates the test database (safe to re-run; skips if it already exists)
+7. Starts the FastAPI dev server at `http://localhost:8000/`
+
+**First run only:** the Docker build compiles pgvector from source — expect about a minute. Subsequent runs start in seconds.
+
+### API keys required
+
+| Key | Used for |
+|---|---|
+| `OPENAI_API_KEY` | Embedding pipeline — note create/update, semantic search |
+| `ANTHROPIC_API_KEY` | `/ask` (RAG answer generation) and `/draft` (note drafting agent) |
+
+Set both in `.env` before re-running `.\setup.ps1`. The app starts without them but embedding and LLM features will error.
 
 ### Running tests
 
-Tests use a separate database. Run these two commands once after first starting the container:
-
-```bash
-docker exec learn-stack-db-1 psql -U postgres -c "CREATE DATABASE learnstack_test;"
-docker exec learn-stack-db-1 psql -U postgres -d learnstack_test -c "CREATE EXTENSION IF NOT EXISTS vector;"
-```
-
-The `vector` extension must be enabled in the test database separately — it is not inherited from the main database, and the `embedding` column type won't be recognized without it.
-
-These only need to be run once. The databases persist in the Docker volume across restarts. You would need to repeat this after `docker compose down -v` (which destroys volumes).
-
-`TEST_DATABASE_URL` in `.env` must point to this database (already set in `.env.example`).
-
-```bash
+```powershell
 pytest
 ```
+
+The test database is created automatically by `setup.ps1`. If you ever destroy volumes with `docker compose down -v`, re-run `.\setup.ps1` to recreate it.
+
+---
+
+## Cloud deployment (Render)
+
+LearnStack is deployable to [Render](https://render.com) as a Docker web service backed by a managed Postgres instance. `render.yaml` defines everything as code.
+
+### First deploy
+
+1. Push the repo to GitHub.
+2. In the Render dashboard: **New → Blueprint** → connect your repo. Render reads `render.yaml` and creates the web service and database automatically.
+3. In the web service's **Environment** tab, set the three required variables:
+   - `DATABASE_URL` — copy the **Internal Database URL** from your Render Postgres instance (use the `postgresql+asyncpg://` form)
+   - `OPENAI_API_KEY`
+   - `ANTHROPIC_API_KEY`
+4. After the first deploy completes, open the web service **Shell** tab and run:
+   ```
+   alembic upgrade head
+   ```
+5. The app is live at your Render-assigned URL.
+
+### Subsequent deploys
+
+Push to the connected branch — Render rebuilds and redeploys automatically. If a migration is included in the push, run `alembic upgrade head` from the Shell tab after the deploy completes.
+
+### Why migrations are manual
+
+Running `alembic upgrade head` in the startup command causes crash-loops when a migration fails — the service restarts endlessly before you can inspect the error. Running it manually via the Shell tab keeps startup clean and gives you control.
 
 ---
 
@@ -145,7 +171,7 @@ pytest
 
 This project was inspired by Andrej Karpathy's [LLM Wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) concept — the idea of a persistent, AI-maintained personal knowledge base where knowledge compounds over time rather than scattering across chat history. The YouTube video [*Build An AI Second Brain Knowledge Base (Step-By-Step)*](https://www.youtube.com/watch?v=yke4fLQUsh4) helped bring that concept into focus.
 
-The architecture here takes a different approach: rather than an LLM-maintained wiki, LearnStack is a RAG system — you write the notes, they get embedded, and the system retrieves and answers from what you actually captured. The implementation is my own, built incrementally over seven phases as a learning exercise in FastAPI, Postgres, pgvector, and LLM API integration.
+The architecture here takes a different approach: rather than an LLM-maintained wiki, LearnStack is a RAG system — you write the notes, they get embedded, and the system retrieves and answers from what you actually captured. The implementation is my own, built incrementally over ten phases as a learning exercise in FastAPI, Postgres, pgvector, LLM API integration, and cloud deployment.
 
 ---
 
