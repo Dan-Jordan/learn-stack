@@ -3,6 +3,7 @@ services:
     name: learnstack
     runtime: docker
     dockerfilePath: ./Dockerfile.app
+    plan: free
     healthCheckPath: /health
     envVars:
       - key: DATABASE_URL
