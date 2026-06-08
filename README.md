@@ -147,23 +147,36 @@ LearnStack is deployable to [Render](https://render.com) as a Docker web service
 
 1. Push the repo to GitHub.
 2. In the Render dashboard: **New → Blueprint** → connect your repo. Render reads `render.yaml` and creates the web service and database automatically.
-3. In the web service's **Environment** tab, set the three required variables:
-   - `DATABASE_URL` — copy the **Internal Database URL** from your Render Postgres instance (use the `postgresql+asyncpg://` form)
-   - `OPENAI_API_KEY`
-   - `ANTHROPIC_API_KEY`
-4. After the first deploy completes, open the web service **Shell** tab and run:
-   ```
-   alembic upgrade head
-   ```
-5. The app is live at your Render-assigned URL.
+3. Leave `DATABASE_URL` blank at this step — the database doesn't exist yet. Fill in `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` now.
+4. After the blueprint deploys and the database is provisioned, go to the **learnstack** web service → **Environment** tab and set `DATABASE_URL` — copy the **Internal Database URL** from the Render Postgres instance and change the scheme from `postgres://` to `postgresql+asyncpg://`.
+5. Save and deploy — Alembic migrations run automatically on startup.
+6. The app is live at your Render-assigned URL.
 
 ### Subsequent deploys
 
-Push to the connected branch — Render rebuilds and redeploys automatically. If a migration is included in the push, run `alembic upgrade head` from the Shell tab after the deploy completes.
+Push to the connected branch — Render rebuilds and redeploys automatically. Migrations run on every startup and are idempotent — if the schema is already current, they complete instantly with no changes.
 
-### Why migrations are manual
+### Why migrations run on startup
 
-Running `alembic upgrade head` in the startup command causes crash-loops when a migration fails — the service restarts endlessly before you can inspect the error. Running it manually via the Shell tab keeps startup clean and gives you control.
+Shell access is not available on the free tier, so manual migration is not an option. `Dockerfile.app` runs `alembic upgrade head` before starting uvicorn. This is safe because Alembic migrations are idempotent.
+
+### Loading local notes into Render
+
+`pg_dump` and `pg_restore` are not installed locally — Postgres runs inside Docker, so these commands run via `docker exec`.
+
+```powershell
+# Dump local database
+docker exec -t learn-stack-db-1 pg_dump -U postgres -d learnstack -F c -f /tmp/learnstack_backup.dump
+docker cp learn-stack-db-1:/tmp/learnstack_backup.dump ./learnstack_backup.dump
+docker exec learn-stack-db-1 rm /tmp/learnstack_backup.dump
+
+# Restore to Render (data only — schema already exists from migrations)
+docker cp learnstack_backup.dump learn-stack-db-1:/tmp/learnstack_backup.dump
+docker exec -t learn-stack-db-1 pg_restore -d "your-render-external-url" --no-owner --data-only -t notes -F c /tmp/learnstack_backup.dump
+docker exec learn-stack-db-1 rm /tmp/learnstack_backup.dump
+```
+
+Use the **External Database URL** from the Render dashboard (the internal URL only works from inside Render's network). Use `--data-only -t notes` to skip schema creation and only restore note rows.
 
 ---
 

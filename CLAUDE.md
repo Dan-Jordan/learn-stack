@@ -81,16 +81,35 @@ Built:
 **Design decisions:**
 - Two Dockerfiles: `Dockerfile` (Postgres + pgvector, local dev only) and `Dockerfile.app` (Python/FastAPI, used by Render) — keeps concerns separate and avoids confusing the Render build
 - `render.yaml` marks all three env vars (`DATABASE_URL`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) as `sync: false` — values are set manually in the Render dashboard, never committed to the repo
-- Alembic migration (`alembic upgrade head`) is run manually via Render's Shell after the first deploy — not wired into startup, because a failed migration on startup causes the service to crash-loop
+- `render.yaml` must specify `plan: free` on the web service — Render defaults to the Starter tier ($7/month) if omitted
+- Alembic migration runs automatically on startup via `CMD alembic upgrade head && uvicorn ...` in `Dockerfile.app` — Shell access is not available on the free tier, so manual migration is not possible; Alembic is idempotent so re-running on every deploy is safe
 - `Dockerfile.app` uses `python:3.11-slim` (not Alpine) — avoids common compile-time issues with async Postgres drivers (`asyncpg`)
 - Health endpoint is deliberately simple — no DB ping, no dependency checks; Render just needs an HTTP 200 to confirm the process started
 
 **Deployment steps (first deploy):**
 1. Push repo to GitHub
 2. In Render dashboard: New → Blueprint → connect repo → Render reads `render.yaml` and creates the web service and database
-3. Set env vars in Render dashboard: `DATABASE_URL` (copy from the managed DB's connection string panel), `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`
-4. After first deploy succeeds: open Render Shell → `alembic upgrade head`
+3. Set env vars in Render dashboard: `DATABASE_URL` (copy the Internal Database URL from the managed DB's connection string panel, change `postgres://` to `postgresql+asyncpg://`), `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`
+4. Deploy — migrations run automatically on startup
 5. App is live at the Render-assigned URL
+
+**Loading local notes into Render (optional):**
+
+`pg_dump` and `pg_restore` are not installed locally — Postgres runs in Docker, so these commands must be run via `docker exec`.
+
+```powershell
+# Dump local database
+docker exec -t learn-stack-db-1 pg_dump -U postgres -d learnstack -F c -f /tmp/learnstack_backup.dump
+docker cp learn-stack-db-1:/tmp/learnstack_backup.dump ./learnstack_backup.dump
+docker exec learn-stack-db-1 rm /tmp/learnstack_backup.dump
+
+# Restore to Render (data only — schema already exists from migrations)
+docker cp learnstack_backup.dump learn-stack-db-1:/tmp/learnstack_backup.dump
+docker exec -t learn-stack-db-1 pg_restore -d "postgresql+asyncpg://..." --no-owner --data-only -t notes -F c /tmp/learnstack_backup.dump
+docker exec learn-stack-db-1 rm /tmp/learnstack_backup.dump
+```
+
+Use `--data-only -t notes` to skip schema creation and only restore note rows. Any duplicate key errors on a single row can be ignored — they mean that note already exists in Render.
 
 ---
 
@@ -444,7 +463,8 @@ Decisions made during development that future work should respect.
 | Phase 9 | Test DB creation is idempotent — errors suppressed | Safe to re-run `setup.ps1` at any time without manual cleanup |
 | Phase 9 | PowerShell only (`setup.ps1`) | Matches the target platform (Windows); a `setup.sh` is the right future addition for macOS/Linux |
 | Phase 10 | Two Dockerfiles (`Dockerfile` and `Dockerfile.app`) | `Dockerfile` builds the Postgres+pgvector image for local dev; `Dockerfile.app` builds the Python/FastAPI image for Render — mixing them would require runtime branching |
-| Phase 10 | Alembic migration run manually after first deploy | Running migrations in the startup command causes crash-loops on failure; manual run via Render Shell is safer and explicit |
+| Phase 10 | Alembic migration wired into Docker startup command | Free tier has no shell access; `alembic upgrade head && uvicorn ...` in CMD runs migrations automatically; idempotent so safe on every deploy |
+| Phase 10 | `plan: free` required in `render.yaml` | Render defaults to Starter ($7/month) if plan is omitted; must be explicit |
 | Phase 10 | `sync: false` on all env vars in `render.yaml` | API keys and DB connection strings must never be committed; Render dashboard is the right place to set them |
 | Phase 10 | `python:3.11-slim` not Alpine for `Dockerfile.app` | Alpine requires extra musl/gcc steps to compile `asyncpg`; slim avoids that without adding significant image size |
 | Phase 10 | Health endpoint has no DB ping | Render's health check just needs a 200; adding DB ping means a DB outage restarts the web service unnecessarily |
