@@ -1,5 +1,6 @@
 import os
 from anthropic import AsyncAnthropic
+from app.models.note import Note
 
 
 def _client() -> AsyncAnthropic:
@@ -7,7 +8,7 @@ def _client() -> AsyncAnthropic:
     return AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
 
-async def generate_answer(question: str, context_notes: list) -> str:
+async def generate_answer(question: str, context_notes: list[tuple[Note, float]]) -> str:
     context = "\n\n".join(
         f"[Note: {note.title}]\n{note.content}" for note, _ in context_notes
     )
