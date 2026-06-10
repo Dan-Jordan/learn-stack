@@ -76,18 +76,19 @@ Phase 10 is complete. Phase 11 (Notes Assistant) adds a multi-tool conversationa
 
 ## Phase 11 — Planned (Notes Assistant)
 
-**Goal:** A `POST /chat` endpoint backed by a multi-tool agent loop. Unlike `/draft` (which forces a single tool via `tool_choice`), this agent has multiple tools available and decides — turn by turn — whether to search notes, create a note, fetch a specific note, or just respond in text.
+**Goal:** A `POST /chat` endpoint backed by a multi-tool agent loop. Unlike `/draft` (which forces a single tool via `tool_choice`), this agent has multiple tools available and decides — turn by turn — whether to search notes, create a note, or just respond in text.
 
 **Why:** `/query`, `/ask`, and `/draft` each wrap one capability behind one endpoint with no decision-making. This phase introduces the agent-loop pattern (`tool_choice: "auto"`, multi-turn tool execution, conversation state) as its own learning milestone, distinct from Phase 12's batch/scheduling pattern.
 
 Planned components:
-- [ ] `app/assistant.py` — `_TOOLS` list (`search_notes`, `create_note`, `get_note`) and `run_assistant(messages)` implementing the agent loop: call model with `tool_choice: "auto"` → if `tool_use`, dispatch to the matching `app/crud/notes.py` function and append a `tool_result` → repeat until the model responds in text or a max-iteration cap is hit
+- [ ] `app/assistant.py` — `_TOOLS` list (`search_notes`, `create_note`) and `run_assistant(messages)` implementing the agent loop: call model with `tool_choice: "auto"` → if `tool_use`, dispatch to the matching `app/crud/notes.py` function and append a `tool_result` → repeat until the model responds in text or a max-iteration cap is hit
 - [ ] `app/routers/assistant.py` — `POST /chat` accepts `{message, conversation_id?}` and returns the final text plus a trace of tools called
 - [ ] `static/index.html` — new "Assistant" tab with a chat-style UI, distinct from the existing single-shot Ask tab
 - [ ] `tests/test_assistant.py` — mock `messages.create` to return scripted tool-use/text responses across loop iterations; verify tool dispatch and loop termination
 
 **Design decisions (proposed):**
 - `tool_choice: "auto"` is the defining difference from `/draft`'s forced single tool — this is what makes it an agent rather than structured extraction
+- Launch with two tools (`search_notes` + `create_note`) — one read, one write — to keep the focus on the agent loop itself. `get_note` (by-ID fetch) and trimming search results to snippets are deferred: they're retrieval/cost optimizations, not agent-loop concepts. `search_notes` returns full notes for now (matching `search_notes_semantic`), which is why a separate `get_note` adds little in single-turn use
 - Hard cap on loop iterations (e.g. 5); if exceeded, return the model's current text plus a note that the limit was hit
 - Conversation history is client-supplied and stateless initially (like `/ask`) — no new storage until proven necessary
 - Tool execution dispatches to existing `app/crud/notes.py` functions — no duplicated business logic; the agent is a new orchestration layer over what already exists
@@ -127,25 +128,6 @@ Planned components:
 - Choosing K is a manual/iterative judgment call — bad K gives meaningless clusters
 - LLM labeling adds a small API cost per cluster per run
 - Render free-tier process sleep could cause the in-process scheduler to miss runs — needs verification once deployed
-
-Planned components:
-- [ ] `app/assistant.py` — `_TOOLS` list (`search_notes`, `create_note`, `get_note`) and `run_assistant(messages)` implementing the agent loop: call model with `tool_choice: "auto"` → if `tool_use`, dispatch to the matching `app/crud/notes.py` function and append a `tool_result` → repeat until the model responds in text or a max-iteration cap is hit
-- [ ] `app/routers/assistant.py` — `POST /chat` accepts `{message, conversation_id?}` and returns the final text plus a trace of tools called
-- [ ] `static/index.html` — new "Assistant" tab with a chat-style UI, distinct from the existing single-shot Ask tab
-- [ ] `tests/test_assistant.py` — mock `messages.create` to return scripted tool-use/text responses across loop iterations; verify tool dispatch and loop termination
-
-**Design decisions (proposed):**
-- `tool_choice: "auto"` is the defining difference from `/draft`'s forced single tool — this is what makes it an agent rather than structured extraction
-- Hard cap on loop iterations (e.g. 5); if exceeded, return the model's current text plus a note that the limit was hit
-- Conversation history is client-supplied and stateless initially (like `/ask`) — no new storage until proven necessary
-- Tool execution dispatches to existing `app/crud/notes.py` functions — no duplicated business logic; the agent is a new orchestration layer over what already exists
-- `/draft` remains for "I have raw content, structure it"; the assistant is for "have a conversation, the model decides what to do" — not a replacement
-
-**Risks / gotchas:**
-- Cost: a single user message can trigger multiple API calls (search → reason → maybe create) instead of `/ask`'s one
-- Runaway looping — needs the iteration cap and clear tool descriptions to avoid repeated near-duplicate `search_notes` calls
-- The "What makes a good note" criteria must be reflected in the `create_note` tool's description here too; consider a confirm-before-save step rather than silent autonomous saves, consistent with `/draft`'s human-in-the-loop design
-- Overlap with `/ask` — decide whether `/ask` stays as a simpler always-search-then-answer option or eventually folds into this
 
 ---
 
