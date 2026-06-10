@@ -46,6 +46,8 @@ When working on Phase 1–3, keep the RAG architecture in mind even when not bui
 
 Phase 10 is complete. Phase 11 adds HTTP Basic Auth to the Render deployment so the app can be shared without being fully public.
 
+**Phase 12 — Planned next.** After auth, Phase 12 (Insights) adds a scheduled clustering pipeline over note embeddings. See the Phase 12 section below for the full plan.
+
 ---
 
 ## RAG phases overview
@@ -59,12 +61,42 @@ Phase 10 is complete. Phase 11 adds HTTP Basic Auth to the Render deployment so 
 | 9 | Setup script | `.\setup.ps1` from a clean clone brings the full stack up in one command |
 | 10 | Cloud deployment | LearnStack running on Render at a public URL |
 | 11 | Authentication | HTTP Basic Auth gates all routes; credentials set via env vars, changeable without code changes |
+| 12 | Insights | A scheduled job clusters note embeddings into topics and labels them; `/insights` shows the results |
 
 **Embedding model:** OpenAI text-embedding API (industry standard, fractions of a cent per note for personal use).
 
 **Deferred to Phase 7 (now complete):** An agent that drafts notes from raw content (paste in a doc or Stack Overflow answer, get a structured note back).
 
 **Deferred to Phase 8:** Job postings — a separate table with structured fields (company, role, status, URL). Not stored in the notes table.
+
+---
+
+## Phase 12 — Planned (Insights)
+
+**Goal:** A scheduled job clusters note embeddings into topics, labels each cluster via the LLM, and stores the results so the UI can show what your notes are actually about — without asking a question.
+
+**Why:** Embeddings are generated on every note (Phase 4) but are currently only used reactively, in `/query` and `/ask`. This phase mines that existing data for patterns, and introduces a scheduled/batch pipeline pattern (a core data engineering skill) at a scale that fits "start simple."
+
+Planned components:
+- [ ] `app/clustering.py` — `cluster_notes()`: pulls all notes with non-null embeddings, runs `sklearn.cluster.KMeans` (or `MiniBatchKMeans`) to group them, then sends each cluster's note titles/snippets to Claude Haiku to generate a short label
+- [ ] Alembic migration — add nullable `cluster_id` FK column to `notes`, plus a new `note_clusters` table (`id`, `label`, `created_at`)
+- [ ] `app/routers/insights.py` — `GET /insights` returns clusters with labels and member notes; `POST /insights/refresh` manually triggers `cluster_notes()`
+- [ ] `app/main.py` — register insights router; wire up `APScheduler` to run `cluster_notes()` on a weekly interval
+- [ ] `static/index.html` — new "Insights" tab: cluster cards (label, note count, member titles linking to notes), plus a "Refresh now" button
+- [ ] `tests/test_clustering.py` — unit test `cluster_notes()` against a fixture set of pre-made embeddings; mock the LLM labeling call (same pattern as `test_ask.py`)
+- [ ] `tests/test_insights.py` — endpoint tests for `/insights` and `/insights/refresh`, mocking `cluster_notes`
+
+**Design decisions (proposed):**
+- Recompute clusters wholesale on each run rather than incrementally — simpler, and cheap at personal-note volume
+- `cluster_id` lives directly on `notes` (one cluster per note at a time) rather than a join table — avoids unnecessary many-to-many complexity
+- `APScheduler` runs in-process inside the FastAPI app — no new infrastructure, consistent with "start simple"; revisit if Render's free tier sleeps the process and breaks the schedule
+- K (number of clusters) starts as a fixed small number; revisit once there's enough notes for tuning to matter
+
+**Risks / gotchas:**
+- Clustering is only meaningful once there are enough notes (roughly 20+) with embeddings
+- Choosing K is a manual/iterative judgment call — bad K gives meaningless clusters
+- LLM labeling adds a small API cost per cluster per run
+- Render free-tier process sleep could cause the in-process scheduler to miss runs — needs verification once deployed
 
 ---
 
@@ -506,13 +538,65 @@ Prefer explanations that connect new concepts to the developer's existing streng
 
 ---
 
+## What makes a good note
+
+RAG's value over a plain LLM conversation is specificity to *your* history —
+not general knowledge you could re-derive or re-look-up at any time. Use this
+to judge whether a suggested note is worth capturing:
+
+**Good fit — capture these:**
+- Project-specific facts, configs, and gotchas (e.g. "Render needs `plan: free`
+  set explicitly or it defaults to Starter")
+- Decisions and the *why* behind them (the kind of entry that belongs in the
+  Decisions Log) — easy to re-litigate later if the reasoning isn't written down
+- Errors and their fixes, especially ones tied to this project's specific setup
+  (Docker images, env vars, dependency versions)
+- Anything that "fades" — you understood it when it happened, but the specific
+  detail (exact env var name, exact error string, exact workaround) won't stick
+
+**Poor fit — skip or trim these:**
+- General concepts you've understood well enough to retain or re-explain
+  (e.g. "what `create_async_engine` does," "what a SQLAlchemy session is") —
+  low retrieval value, since you could reconstruct or re-look-up the
+  explanation easily
+- Tutorials/how-tos that aren't tied to a project-specific decision or gotcha
+- Patterns with no `project:` tag and no connection to LearnStack's own
+  history — if it's pure general knowledge, a note doesn't add much
+
+**When reviewing a suggested note:** if it reads like documentation anyone
+could write, it's probably a poor fit. If it reads like "future-you would
+otherwise have to re-debug or re-decide this," it's a good fit. When a note is
+mixed (a general tutorial with one real gotcha buried in it), extract just the
+project-specific part rather than keeping the whole thing.
+
+---
+
 ## Note capture workflow
 
-While the API is being built, notes are written as markdown files and batch-imported later.
+There are two intentional paths for capturing notes. Both end up as rows in
+the `notes` table — neither is more "canonical" than the other.
 
-**To create a note:** tell Claude Code "create a note about X". It will write a new file to `notes-inbox/` using `notes-inbox/_template.md` as the format and `notes-inbox/sqlalchemy-session-unit-of-work.md` as a filled-in example.
+**Browser path (web UI):** Use the Draft & Save tab at `/`. Paste raw content,
+the `/draft` agent structures it into a draft note, you review and save via
+`POST /notes`. Best when you're already in the browser or working from pasted
+content (docs, Stack Overflow answers, etc.).
 
-**To import notes:** once the API is running, `python import_notes.py` posts all inbox files to the API and moves them to `notes-inbox/processed/`.
+**Terminal / Claude Code path (markdown inbox):** Tell Claude Code "create a
+note about X". It writes a new file to `notes-inbox/` using
+`notes-inbox/_template.md` as the format and `examples/sample-note.md` as a
+filled-in example. Best when you're heads-down in the terminal and don't want
+to context-switch to a browser.
+
+**To import inbox notes:** once the API is running, `python import_notes.py`
+posts all `notes-inbox/*.md` files to `POST /notes` and moves them to
+`notes-inbox/processed/`.
+
+**Note:** `notes-inbox/processed/` is gitignored and only reflects notes
+imported via `import_notes.py` on this machine — it is a local audit trail,
+not a mirror of every note in the database, and won't exist on a fresh clone.
+Notes created via the web UI or Swagger have no markdown counterpart either.
+`examples/sample-note.md` is the one filled-in example kept under version
+control for reference.
 
 ---
 

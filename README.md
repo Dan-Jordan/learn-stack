@@ -23,7 +23,7 @@ LearnStack is not a second brain or an AI agent. It is a backend application tha
 - Single-page web UI at `/` — Draft & Save, Notes, Ask, and Semantic Search tabs; no JSON editing required
 - Postgres backend with pgvector extension, schema managed by Alembic migrations
 - Embeddings generated automatically on note create/update via OpenAI text-embedding API
-- Markdown-based note capture workflow for capturing learning before the API is running
+- Two note capture paths: the web UI's Draft & Save tab (browser), or a markdown inbox workflow (`notes-inbox/` → `import_notes.py`) for capturing notes from the terminal/Claude Code without context-switching
 - Deployable to Render via `render.yaml` — Docker web service + managed Postgres, one-command setup for cloud hosting
 
 ---
