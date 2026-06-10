@@ -44,9 +44,11 @@ When working on Phase 1–3, keep the RAG architecture in mind even when not bui
 
 **Phase 11 — Not started**
 
-Phase 10 is complete. Phase 11 adds HTTP Basic Auth to the Render deployment so the app can be shared without being fully public.
+Phase 10 is complete. Phase 11 (Notes Assistant) adds a multi-tool conversational agent (`POST /chat`) that decides which tool to use — search, create, or fetch a note — rather than being forced into one. See the Phase 11 section below for the full plan.
 
-**Phase 12 — Planned next.** After auth, Phase 12 (Insights) adds a scheduled clustering pipeline over note embeddings. See the Phase 12 section below for the full plan.
+**Phase 12 — Planned next.** Phase 12 (Insights) adds a scheduled clustering pipeline over note embeddings. See the Phase 12 section below for the full plan.
+
+**Phase 13 — Planned after that.** Phase 13 adds HTTP Basic Auth to the Render deployment so the app can be shared without being fully public.
 
 ---
 
@@ -60,14 +62,42 @@ Phase 10 is complete. Phase 11 adds HTTP Basic Auth to the Render deployment so 
 | 6 | LLM answer generation | A question returns a grounded answer citing your own notes |
 | 9 | Setup script | `.\setup.ps1` from a clean clone brings the full stack up in one command |
 | 10 | Cloud deployment | LearnStack running on Render at a public URL |
-| 11 | Authentication | HTTP Basic Auth gates all routes; credentials set via env vars, changeable without code changes |
+| 11 | Notes Assistant | `POST /chat` runs a multi-tool agent that decides whether to search, create, or fetch notes |
 | 12 | Insights | A scheduled job clusters note embeddings into topics and labels them; `/insights` shows the results |
+| 13 | Authentication | HTTP Basic Auth gates all routes; credentials set via env vars, changeable without code changes |
 
 **Embedding model:** OpenAI text-embedding API (industry standard, fractions of a cent per note for personal use).
 
 **Deferred to Phase 7 (now complete):** An agent that drafts notes from raw content (paste in a doc or Stack Overflow answer, get a structured note back).
 
 **Deferred to Phase 8:** Job postings — a separate table with structured fields (company, role, status, URL). Not stored in the notes table.
+
+---
+
+## Phase 11 — Planned (Notes Assistant)
+
+**Goal:** A `POST /chat` endpoint backed by a multi-tool agent loop. Unlike `/draft` (which forces a single tool via `tool_choice`), this agent has multiple tools available and decides — turn by turn — whether to search notes, create a note, fetch a specific note, or just respond in text.
+
+**Why:** `/query`, `/ask`, and `/draft` each wrap one capability behind one endpoint with no decision-making. This phase introduces the agent-loop pattern (`tool_choice: "auto"`, multi-turn tool execution, conversation state) as its own learning milestone, distinct from Phase 12's batch/scheduling pattern.
+
+Planned components:
+- [ ] `app/assistant.py` — `_TOOLS` list (`search_notes`, `create_note`, `get_note`) and `run_assistant(messages)` implementing the agent loop: call model with `tool_choice: "auto"` → if `tool_use`, dispatch to the matching `app/crud/notes.py` function and append a `tool_result` → repeat until the model responds in text or a max-iteration cap is hit
+- [ ] `app/routers/assistant.py` — `POST /chat` accepts `{message, conversation_id?}` and returns the final text plus a trace of tools called
+- [ ] `static/index.html` — new "Assistant" tab with a chat-style UI, distinct from the existing single-shot Ask tab
+- [ ] `tests/test_assistant.py` — mock `messages.create` to return scripted tool-use/text responses across loop iterations; verify tool dispatch and loop termination
+
+**Design decisions (proposed):**
+- `tool_choice: "auto"` is the defining difference from `/draft`'s forced single tool — this is what makes it an agent rather than structured extraction
+- Hard cap on loop iterations (e.g. 5); if exceeded, return the model's current text plus a note that the limit was hit
+- Conversation history is client-supplied and stateless initially (like `/ask`) — no new storage until proven necessary
+- Tool execution dispatches to existing `app/crud/notes.py` functions — no duplicated business logic; the agent is a new orchestration layer over what already exists
+- `/draft` remains for "I have raw content, structure it"; the assistant is for "have a conversation, the model decides what to do" — not a replacement
+
+**Risks / gotchas:**
+- Cost: a single user message can trigger multiple API calls (search → reason → maybe create) instead of `/ask`'s one
+- Runaway looping — needs the iteration cap and clear tool descriptions to avoid repeated near-duplicate `search_notes` calls
+- The "What makes a good note" criteria must be reflected in the `create_note` tool's description here too; consider a confirm-before-save step rather than silent autonomous saves, consistent with `/draft`'s human-in-the-loop design
+- Overlap with `/ask` — decide whether `/ask` stays as a simpler always-search-then-answer option or eventually folds into this
 
 ---
 
@@ -97,6 +127,25 @@ Planned components:
 - Choosing K is a manual/iterative judgment call — bad K gives meaningless clusters
 - LLM labeling adds a small API cost per cluster per run
 - Render free-tier process sleep could cause the in-process scheduler to miss runs — needs verification once deployed
+
+Planned components:
+- [ ] `app/assistant.py` — `_TOOLS` list (`search_notes`, `create_note`, `get_note`) and `run_assistant(messages)` implementing the agent loop: call model with `tool_choice: "auto"` → if `tool_use`, dispatch to the matching `app/crud/notes.py` function and append a `tool_result` → repeat until the model responds in text or a max-iteration cap is hit
+- [ ] `app/routers/assistant.py` — `POST /chat` accepts `{message, conversation_id?}` and returns the final text plus a trace of tools called
+- [ ] `static/index.html` — new "Assistant" tab with a chat-style UI, distinct from the existing single-shot Ask tab
+- [ ] `tests/test_assistant.py` — mock `messages.create` to return scripted tool-use/text responses across loop iterations; verify tool dispatch and loop termination
+
+**Design decisions (proposed):**
+- `tool_choice: "auto"` is the defining difference from `/draft`'s forced single tool — this is what makes it an agent rather than structured extraction
+- Hard cap on loop iterations (e.g. 5); if exceeded, return the model's current text plus a note that the limit was hit
+- Conversation history is client-supplied and stateless initially (like `/ask`) — no new storage until proven necessary
+- Tool execution dispatches to existing `app/crud/notes.py` functions — no duplicated business logic; the agent is a new orchestration layer over what already exists
+- `/draft` remains for "I have raw content, structure it"; the assistant is for "have a conversation, the model decides what to do" — not a replacement
+
+**Risks / gotchas:**
+- Cost: a single user message can trigger multiple API calls (search → reason → maybe create) instead of `/ask`'s one
+- Runaway looping — needs the iteration cap and clear tool descriptions to avoid repeated near-duplicate `search_notes` calls
+- The "What makes a good note" criteria must be reflected in the `create_note` tool's description here too; consider a confirm-before-save step rather than silent autonomous saves, consistent with `/draft`'s human-in-the-loop design
+- Overlap with `/ask` — decide whether `/ask` stays as a simpler always-search-then-answer option or eventually folds into this
 
 ---
 
@@ -507,7 +556,7 @@ Decisions made during development that future work should respect.
 
 Do not build these until the relevant phase is reached:
 
-- Authentication (Phase 11) — HTTP Basic Auth gating all routes; credentials via env vars
+- Authentication (Phase 13) — HTTP Basic Auth gating all routes; credentials via env vars
 - Job postings and application tracking — separate table with dedicated fields; not stored in notes; no target phase
 - URL fetching in the draft agent — paste-only for now; defer to a later phase
 - Multi-user support (not planned)
