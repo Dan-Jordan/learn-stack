@@ -57,7 +57,19 @@ async def draft_note(raw_content: str) -> NoteCreate:
             "You are a technical knowledge assistant. "
             "Given raw content, extract a structured note using the create_note tool. "
             "Rewrite the content as clean, concise Markdown. "
-            "Choose the most specific note_type that fits."
+            "Choose the most specific note_type that fits.\n\n"
+            "This note will be retrieved later via semantic search, so prioritize "
+            "what's worth retrieving: project-specific facts, configs, gotchas, "
+            "errors and their fixes, and decisions along with the reasoning behind "
+            "them — the kind of detail that fades from memory and would otherwise "
+            "be re-debugged or re-decided later. Prefer note_type values like "
+            "error_fix, technical_note, or project_note for this kind of content.\n\n"
+            "Trim or de-emphasize general concept explanations that the reader "
+            "already understands well enough to retain or re-look-up easily "
+            "(e.g. how a standard library function or common pattern works in "
+            "general). If the raw content is mostly general explanation with one "
+            "specific gotcha or decision buried in it, focus the note on that "
+            "specific part rather than reproducing the whole explanation."
         ),
         tools=[_DRAFT_TOOL],
         tool_choice={"type": "tool", "name": "create_note"},
