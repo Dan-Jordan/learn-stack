@@ -42,9 +42,9 @@ When working on Phase 1–3, keep the RAG architecture in mind even when not bui
 
 ## Current phase
 
-**Phase 11 — Not started**
+**Phase 11 — In progress**
 
-Phase 10 is complete. Phase 11 (Notes Assistant) adds a multi-tool conversational agent (`POST /chat`) that decides which tool to use — search, create, or fetch a note — rather than being forced into one. See the Phase 11 section below for the full plan.
+Phase 10 is complete. Phase 11 (Notes Assistant) adds a multi-tool conversational agent (`POST /chat`) that decides which tool to use — search, create, or fetch a note — rather than being forced into one. The agent loop (`app/assistant.py`) and the shared `create_note` tool schema are built; the `/chat` router, request/response schemas, tests, and UI tab are still to come. See the Phase 11 section below for the full plan and the decisions settled so far.
 
 **Phase 12 — Planned next.** Phase 12 (Insights) adds a scheduled clustering pipeline over note embeddings. See the Phase 12 section below for the full plan.
 
@@ -74,30 +74,36 @@ Phase 10 is complete. Phase 11 (Notes Assistant) adds a multi-tool conversationa
 
 ---
 
-## Phase 11 — Planned (Notes Assistant)
+## Phase 11 — In progress (Notes Assistant)
 
 **Goal:** A `POST /chat` endpoint backed by a multi-tool agent loop. Unlike `/draft` (which forces a single tool via `tool_choice`), this agent has multiple tools available and decides — turn by turn — whether to search notes, create a note, or just respond in text.
 
 **Why:** `/query`, `/ask`, and `/draft` each wrap one capability behind one endpoint with no decision-making. This phase introduces the agent-loop pattern (`tool_choice: "auto"`, multi-turn tool execution, conversation state) as its own learning milestone, distinct from Phase 12's batch/scheduling pattern.
 
 Planned components:
-- [ ] `app/assistant.py` — `_TOOLS` list (`search_notes`, `create_note`) and `run_assistant(messages)` implementing the agent loop: call model with `tool_choice: "auto"` → if `tool_use`, dispatch to the matching `app/crud/notes.py` function and append a `tool_result` → repeat until the model responds in text or a max-iteration cap is hit
-- [ ] `app/routers/assistant.py` — `POST /chat` accepts `{message, conversation_id?}` and returns the final text plus a trace of tools called
+- [x] `app/assistant.py` — `_TOOLS` list (`search_notes`, `create_note`) and `run_assistant(messages, db)` implementing the agent loop: call model with `tool_choice` defaulted to `"auto"` → if `tool_use`, dispatch to the matching `app/crud/notes.py` function and append a `tool_result` → repeat until the model responds in text or the `MAX_ITERATIONS = 5` cap is hit. `create_note` is confirm-before-save — it records the proposed draft in the trace and does **not** persist
+- [x] `app/schemas/note.py` — `NOTE_TOOL_INPUT_SCHEMA`, the shared `create_note` tool input contract referenced by both `app/agent.py` and `app/assistant.py` (single source of truth; mirrors `NoteCreate`). The `/chat` request/response schemas (`ChatRequest`, `ChatResponse`, `ToolCall`) are still to be added here
+- [ ] `app/routers/assistant.py` — `POST /chat` accepts `{message, history?}` and returns the final text plus a trace of tools called
+- [ ] `app/main.py` — register the assistant router
 - [ ] `static/index.html` — new "Assistant" tab with a chat-style UI, distinct from the existing single-shot Ask tab
 - [ ] `tests/test_assistant.py` — mock `messages.create` to return scripted tool-use/text responses across loop iterations; verify tool dispatch and loop termination
 
-**Design decisions (proposed):**
-- `tool_choice: "auto"` is the defining difference from `/draft`'s forced single tool — this is what makes it an agent rather than structured extraction
+**Design decisions (settled during implementation):**
+- `tool_choice: "auto"` (achieved by omitting `tool_choice`) is the defining difference from `/draft`'s forced single tool — this is what makes it an agent rather than structured extraction
+- **`create_note` is confirm-before-save (human-in-the-loop)** — the agent records the proposed draft in the response trace but never persists it; the user reviews and saves via `POST /notes`. Keeps junk out of the RAG store, consistent with `/draft`. (Resolves the confirm-before-save gotcha previously listed below.)
+- **Model: Claude Haiku 4.5** (`claude-haiku-4-5-20251001`) — consistent with `/draft` and `/ask`; cheapest model, sufficient for a 2-tool loop at personal scale
+- **Shared `NOTE_TOOL_INPUT_SCHEMA`** — the `create_note` tool input schema is defined once in `app/schemas/note.py` and referenced by both `agent.py` and `assistant.py`, so the note shape can't drift. Per-field descriptions live in the shared schema; each caller supplies its own top-level tool `description`
+- **Instruction placement** — trigger / when-to-call guidance lives on the tool `description`; the editorial "what makes a good note" policy lives in the `system` prompt (canonical copy is this file's "What makes a good note" section). DRY applies to contracts/schemas, not to prompt prose tuned per surface
+- `run_assistant(messages, db)` takes the DB session (not `run_assistant(messages)` as first sketched) — the loop needs it to dispatch tool calls to `app/crud/notes.py`
 - Launch with two tools (`search_notes` + `create_note`) — one read, one write — to keep the focus on the agent loop itself. `get_note` (by-ID fetch) and trimming search results to snippets are deferred: they're retrieval/cost optimizations, not agent-loop concepts. `search_notes` returns full notes for now (matching `search_notes_semantic`), which is why a separate `get_note` adds little in single-turn use
-- Hard cap on loop iterations (e.g. 5); if exceeded, return the model's current text plus a note that the limit was hit
 - Conversation history is client-supplied and stateless initially (like `/ask`) — no new storage until proven necessary
 - Tool execution dispatches to existing `app/crud/notes.py` functions — no duplicated business logic; the agent is a new orchestration layer over what already exists
 - `/draft` remains for "I have raw content, structure it"; the assistant is for "have a conversation, the model decides what to do" — not a replacement
 
 **Risks / gotchas:**
 - Cost: a single user message can trigger multiple API calls (search → reason → maybe create) instead of `/ask`'s one
-- Runaway looping — needs the iteration cap and clear tool descriptions to avoid repeated near-duplicate `search_notes` calls
-- The "What makes a good note" criteria must be reflected in the `create_note` tool's description here too; consider a confirm-before-save step rather than silent autonomous saves, consistent with `/draft`'s human-in-the-loop design
+- Runaway looping — addressed by the `MAX_ITERATIONS = 5` cap and clear tool descriptions to avoid repeated near-duplicate `search_notes` calls
+- ✓ Resolved: `create_note` is confirm-before-save (not silent autonomous saves), consistent with `/draft`. The "what makes a good note" policy lives in the assistant's `system` prompt, not the tool description — see Design decisions above
 - Overlap with `/ask` — decide whether `/ask` stays as a simpler always-search-then-answer option or eventually folds into this
 
 ---
@@ -531,6 +537,12 @@ Decisions made during development that future work should respect.
 | Phase 10 | `sync: false` on all env vars in `render.yaml` | API keys and DB connection strings must never be committed; Render dashboard is the right place to set them |
 | Phase 10 | `python:3.11-slim` not Alpine for `Dockerfile.app` | Alpine requires extra musl/gcc steps to compile `asyncpg`; slim avoids that without adding significant image size |
 | Phase 10 | Health endpoint has no DB ping | Render's health check just needs a 200; adding DB ping means a DB outage restarts the web service unnecessarily |
+| Phase 11 | `/chat` omits `tool_choice` (defaults to `auto`) | The model decides per turn whether to search, draft, or reply — the defining difference from `/draft`'s forced single tool, and what makes it an agent |
+| Phase 11 | `create_note` is confirm-before-save (human-in-the-loop) | Agent records the proposed draft in the response trace but never persists; user reviews and saves via `POST /notes`. Keeps junk out of the RAG store, consistent with `/draft` |
+| Phase 11 | Assistant loop backed by Claude Haiku 4.5 | Matches `/draft` and `/ask`; cheapest model, sufficient for a 2-tool loop at personal scale |
+| Phase 11 | Hard cap of 5 loop iterations (`MAX_ITERATIONS`) | Prevents runaway looping; on cap, return the current text flagged with the limit |
+| Phase 11 | `create_note` tool input schema extracted to one shared `NOTE_TOOL_INPUT_SCHEMA` | Single source of truth for the tool contract in `app/schemas/note.py`; `agent.py` and `assistant.py` both reference it so the note shape can't drift (mirrors `NoteCreate`) |
+| Phase 11 | Trigger conditions go on the tool `description`; note-quality policy goes in the `system` prompt | Trigger / when-to-call is tool-intrinsic (and only matters under `auto`); editorial policy is task-level. DRY applies to contracts, not to prompt prose tuned per surface |
 
 ---
 
