@@ -1,6 +1,6 @@
 import os
 from anthropic import AsyncAnthropic
-from app.schemas.note import NoteCreate
+from app.schemas.note import NoteCreate, NOTE_TOOL_INPUT_SCHEMA
 from app.models.note import NoteType
 
 
@@ -15,37 +15,7 @@ _DRAFT_TOOL = {
         "Extract a structured technical note from raw content. "
         "Clean and reformat the content as concise Markdown."
     ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "title": {
-                "type": "string",
-                "description": "Short descriptive title for the note",
-            },
-            "content": {
-                "type": "string",
-                "description": "Note body as clean Markdown",
-            },
-            "note_type": {
-                "type": "string",
-                "enum": [t.value for t in NoteType],
-                "description": "Best-fit category for this content",
-            },
-            "tool": {
-                "type": "string",
-                "description": "Primary tool or technology (e.g. dbt, Docker, SQLAlchemy). Omit if not applicable.",
-            },
-            "topic": {
-                "type": "string",
-                "description": "Subject area (e.g. CI/CD, testing, migrations). Omit if not applicable.",
-            },
-            "project": {
-                "type": "string",
-                "description": "Project name this note relates to. Omit if not applicable.",
-            },
-        },
-        "required": ["title", "content", "note_type"],
-    },
+    "input_schema": NOTE_TOOL_INPUT_SCHEMA,
 }
 
 
