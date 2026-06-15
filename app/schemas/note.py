@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 from app.models.note import NoteType
 
@@ -93,3 +94,32 @@ class DraftRequest(BaseModel):
 
 class DraftResponse(BaseModel):
     draft: NoteCreate
+
+
+class ChatMessage(BaseModel):
+    """One prior turn of conversation, supplied by the client (stateless)."""
+
+    role: Literal["user", "assistant"]
+    content: str
+
+
+class ChatRequest(BaseModel):
+    message: str = Field(min_length=1)
+    history: list[ChatMessage] = Field(default_factory=list)
+
+
+class ToolCall(BaseModel):
+    """One tool the agent invoked this turn, for the response trace.
+
+    `input` is the raw tool input the model produced. For create_note it is the
+    proposed (unsaved) draft — the UI reads it to offer a manual save.
+    """
+
+    tool: str
+    input: dict[str, Any]
+    summary: str | None = None
+
+
+class ChatResponse(BaseModel):
+    reply: str
+    trace: list[ToolCall]
