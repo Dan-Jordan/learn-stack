@@ -86,7 +86,7 @@ Built:
 - [x] `app/routers/assistant.py` — `POST /chat`: maps `{message, history}` to the Anthropic message list and returns the final text plus a trace of tools called
 - [x] `app/main.py` — assistant router registered
 - [x] `static/index.html` — new "Assistant" tab: a chat transcript (user/assistant bubbles + a tool-call trace line), distinct from the single-shot Ask tab. `create_note` proposals render as a card with a Save button (`POST /notes`)
-- [x] `tests/test_assistant.py` — 6 tests; mock `app.assistant._client` with scripted tool-use/text responses to exercise the real loop (dispatch, termination, the iteration cap, confirm-before-save). 33 tests passing total
+- [x] `tests/test_assistant.py` — 7 tests; mock `app.assistant._client` with scripted tool-use/text responses to exercise the real loop (dispatch, termination, the iteration cap, confirm-before-save, graceful tool-error handling). 34 tests passing total
 
 **Design decisions:**
 - `tool_choice: "auto"` (achieved by omitting `tool_choice`) is the defining difference from `/draft`'s forced single tool — this is what makes it an agent rather than structured extraction
@@ -369,7 +369,7 @@ learnstack/
 │   ├── test_query.py        # 6 tests — semantic search
 │   ├── test_ask.py          # 5 tests — RAG answer endpoint
 │   ├── test_draft.py        # 6 tests — notes agent endpoint
-│   └── test_assistant.py    # 6 tests — notes assistant agent loop
+│   └── test_assistant.py    # 7 tests — notes assistant agent loop
 ├── alembic/                 # Migration scripts
 │   ├── env.py
 │   └── versions/
