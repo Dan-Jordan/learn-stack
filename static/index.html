@@ -388,11 +388,11 @@
   }
 
   function noteTypeBadge(t) {
-    return `<span class="badge type">${t.replace(/_/g, ' ')}</span>`;
+    return `<span class="badge type">${escHtml(String(t ?? '').replace(/_/g, ' '))}</span>`;
   }
 
   function metaBadge(label, val) {
-    return val ? `<span class="badge" title="${label}">${val}</span>` : '';
+    return val ? `<span class="badge" title="${escHtml(label)}">${escHtml(val)}</span>` : '';
   }
 
   function renderNoteCard(note, opts = {}) {
