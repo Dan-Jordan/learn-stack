@@ -70,6 +70,25 @@ async def test_search_then_answer(client: AsyncClient):
     assert body["trace"][0]["input"] == {"query": "docker"}
 
 
+async def test_tool_failure_is_returned_to_model_not_500(client: AsyncClient):
+    """A failing tool call yields an is_error result the model recovers from, not a 500."""
+    responses = [
+        make_response("tool_use", [tool_block("search_notes", {"query": "docker"})]),
+        make_response("end_turn", [text_block("Sorry, I could not search just now.")]),
+    ]
+    fake, create = make_client(responses)
+    with patch("app.assistant._client", return_value=fake), patch(
+        "app.assistant.notes_crud.search_notes_semantic",
+        new=AsyncMock(side_effect=RuntimeError("embedding API down")),
+    ):
+        resp = await client.post("/chat", json={"message": "what about docker?"})
+    assert resp.status_code == 200
+    body = resp.json()
+    # The loop caught the tool error, fed it back, and the model produced a final reply.
+    assert body["reply"] == "Sorry, I could not search just now."
+    assert create.call_count == 2
+
+
 async def test_create_note_is_not_persisted(client: AsyncClient):
     """create_note is confirm-before-save: proposed in the trace, never written."""
     draft = {
