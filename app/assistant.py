@@ -112,36 +112,48 @@ async def run_assistant(messages: list[dict], db: AsyncSession) -> tuple[str, li
         for block in response.content:
             if block.type != "tool_use":
                 continue
-            if block.name == "search_notes":
-                result_text, count = await _run_search(db, block.input)
-                trace.append(
-                    {"tool": "search_notes", "input": block.input, "summary": f"{count} note(s) found"}
-                )
-                tool_results.append(
-                    {"type": "tool_result", "tool_use_id": block.id, "content": result_text}
-                )
-            elif block.name == "create_note":
-                # Confirm-before-save: record the draft, do not persist.
-                trace.append(
-                    {"tool": "create_note", "input": block.input, "summary": "draft proposed for review"}
-                )
+            try:
+                if block.name == "search_notes":
+                    result_text, count = await _run_search(db, block.input)
+                    trace.append(
+                        {"tool": "search_notes", "input": block.input, "summary": f"{count} note(s) found"}
+                    )
+                    tool_results.append(
+                        {"type": "tool_result", "tool_use_id": block.id, "content": result_text}
+                    )
+                elif block.name == "create_note":
+                    # Confirm-before-save: record the draft, do not persist.
+                    trace.append(
+                        {"tool": "create_note", "input": block.input, "summary": "draft proposed for review"}
+                    )
+                    tool_results.append(
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": (
+                                "Draft prepared and shown to the user for review. It is NOT saved "
+                                "yet — the user will save it manually. Do not call create_note "
+                                "again for this same note."
+                            ),
+                        }
+                    )
+                else:
+                    tool_results.append(
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": f"Unknown tool: {block.name}",
+                            "is_error": True,
+                        }
+                    )
+            except Exception as exc:
+                # A single tool failure (bad tool input, DB/embedding error) should not 500 the
+                # whole conversation — hand the error back so the model can recover or explain.
                 tool_results.append(
                     {
                         "type": "tool_result",
                         "tool_use_id": block.id,
-                        "content": (
-                            "Draft prepared and shown to the user for review. It is NOT saved "
-                            "yet — the user will save it manually. Do not call create_note "
-                            "again for this same note."
-                        ),
-                    }
-                )
-            else:
-                tool_results.append(
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": f"Unknown tool: {block.name}",
+                        "content": f"Tool {block.name} failed: {exc}",
                         "is_error": True,
                     }
                 )
