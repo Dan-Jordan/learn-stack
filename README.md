@@ -19,8 +19,9 @@ LearnStack is not a second brain or an AI agent. It is a backend application tha
 - Query notes by meaning via `POST /query` — semantic search using vector embeddings
 - Ask natural language questions via `POST /ask` — returns a grounded answer with source citations drawn from your own notes
 - Draft structured notes from raw pasted content via `POST /draft` — paste a doc, Stack Overflow answer, or any text and get a structured note back for review
+- Chat with a multi-tool assistant via `POST /chat` — an agent loop that decides per turn whether to search your notes, draft a new one, or just reply; drafted notes are returned for review, never auto-saved
 - Full CRUD via a FastAPI REST API
-- Single-page web UI at `/` — Draft & Save, Notes, Ask, and Semantic Search tabs; no JSON editing required
+- Single-page web UI at `/` — Draft & Save, Notes, Ask, Semantic Search, and Assistant tabs; no JSON editing required
 - Postgres backend with pgvector extension, schema managed by Alembic migrations
 - Embeddings generated automatically on note create/update via OpenAI text-embedding API
 - Two note capture paths: the web UI's Draft & Save tab (browser), or a markdown inbox workflow (`notes-inbox/` → `import_notes.py`) for capturing notes from the terminal/Claude Code without context-switching
@@ -91,6 +92,9 @@ A single-page web UI served by FastAPI at `http://localhost:8000/`. Four tabs: *
 ### Phase 10 — Cloud deployment ✓
 LearnStack runs on [Render](https://render.com) with a managed Postgres database. `render.yaml` defines the web service and database as code. `GET /health` supports Render's health check.
 
+### Phase 11 — Notes Assistant ✓
+`POST /chat` runs a multi-tool agent loop (`tool_choice: "auto"`) over `search_notes` and `create_note`, deciding per turn whether to search your notes, draft a new one, or just reply. Drafts are confirm-before-save — returned for review, never auto-persisted. New **Assistant** chat tab in the web UI. 33 passing tests (6 new).
+
 ---
 
 ## Getting started
@@ -125,7 +129,7 @@ The script handles everything in order:
 | Key | Used for |
 |---|---|
 | `OPENAI_API_KEY` | Embedding pipeline — note create/update, semantic search |
-| `ANTHROPIC_API_KEY` | `/ask` (RAG answer generation) and `/draft` (note drafting agent) |
+| `ANTHROPIC_API_KEY` | `/ask` (RAG answers), `/draft` (note drafting), and `/chat` (notes assistant) |
 
 Set both in `.env` before re-running `.\setup.ps1`. The app starts without them but embedding and LLM features will error.
 
@@ -184,7 +188,7 @@ Use the **External Database URL** from the Render dashboard (the internal URL on
 
 This project was inspired by Andrej Karpathy's [LLM Wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) concept — the idea of a persistent, AI-maintained personal knowledge base where knowledge compounds over time rather than scattering across chat history. The YouTube video [*Build An AI Second Brain Knowledge Base (Step-By-Step)*](https://www.youtube.com/watch?v=yke4fLQUsh4) helped bring that concept into focus.
 
-The architecture here takes a different approach: rather than an LLM-maintained wiki, LearnStack is a RAG system — you write the notes, they get embedded, and the system retrieves and answers from what you actually captured. The implementation is my own, built incrementally over ten phases as a learning exercise in FastAPI, Postgres, pgvector, LLM API integration, and cloud deployment.
+The architecture here takes a different approach: rather than an LLM-maintained wiki, LearnStack is a RAG system — you write the notes, they get embedded, and the system retrieves and answers from what you actually captured. The implementation is my own, built incrementally over eleven phases as a learning exercise in FastAPI, Postgres, pgvector, LLM API integration, agent loops, and cloud deployment.
 
 ---
 
