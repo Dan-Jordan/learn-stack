@@ -1,8 +1,11 @@
+import logging
 import os
 from anthropic import AsyncAnthropic
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.schemas.note import NOTE_TOOL_INPUT_SCHEMA
 from app.crud import notes as notes_crud
+
+logger = logging.getLogger(__name__)
 
 MODEL = "claude-haiku-4-5-20251001"
 MAX_ITERATIONS = 5
@@ -149,6 +152,8 @@ async def run_assistant(messages: list[dict], db: AsyncSession) -> tuple[str, li
             except Exception as exc:
                 # A single tool failure (bad tool input, DB/embedding error) should not 500 the
                 # whole conversation — hand the error back so the model can recover or explain.
+                # Log the full traceback for the developer; the model only gets the short message.
+                logger.exception("Tool %s failed (input=%r)", block.name, block.input)
                 tool_results.append(
                     {
                         "type": "tool_result",
