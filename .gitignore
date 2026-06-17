@@ -17,5 +17,14 @@ build/
 # Notes inbox — keep the folder structure but not imported notes
 notes-inbox/processed/
 
+# Editor / IDE (personal dev config, e.g. debug launch.json)
+.vscode/
+
+# Throwaway exploration scripts
+scratch.py
+
+# Claude Code tooling (personal dev config, e.g. launch.json for previews)
+.claude/
+
 # Local
 NOTES.md

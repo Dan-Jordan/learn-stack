@@ -42,9 +42,9 @@ When working on Phase 1–3, keep the RAG architecture in mind even when not bui
 
 ## Current phase
 
-**Phase 11 — Not started**
+**Phase 11 — Complete ✓**
 
-Phase 10 is complete. Phase 11 (Notes Assistant) adds a multi-tool conversational agent (`POST /chat`) that decides which tool to use — search, create, or fetch a note — rather than being forced into one. See the Phase 11 section below for the full plan.
+Phase 11 (Notes Assistant) shipped `POST /chat` — a multi-tool agent loop (`tool_choice: "auto"`) that decides per turn whether to search notes, draft a note, or just reply — plus an Assistant chat tab in the web UI. See the Phase 11 section below.
 
 **Phase 12 — Planned next.** Phase 12 (Insights) adds a scheduled clustering pipeline over note embeddings. See the Phase 12 section below for the full plan.
 
@@ -62,7 +62,7 @@ Phase 10 is complete. Phase 11 (Notes Assistant) adds a multi-tool conversationa
 | 6 | LLM answer generation | A question returns a grounded answer citing your own notes |
 | 9 | Setup script | `.\setup.ps1` from a clean clone brings the full stack up in one command |
 | 10 | Cloud deployment | LearnStack running on Render at a public URL |
-| 11 | Notes Assistant | `POST /chat` runs a multi-tool agent that decides whether to search, create, or fetch notes |
+| 11 | Notes Assistant | `POST /chat` runs a multi-tool agent that decides whether to search notes, draft one, or just reply |
 | 12 | Insights | A scheduled job clusters note embeddings into topics and labels them; `/insights` shows the results |
 | 13 | Authentication | HTTP Basic Auth gates all routes; credentials set via env vars, changeable without code changes |
 
@@ -74,31 +74,38 @@ Phase 10 is complete. Phase 11 (Notes Assistant) adds a multi-tool conversationa
 
 ---
 
-## Phase 11 — Planned (Notes Assistant)
+## Phase 11 — Complete ✓
 
-**Goal:** A `POST /chat` endpoint backed by a multi-tool agent loop. Unlike `/draft` (which forces a single tool via `tool_choice`), this agent has multiple tools available and decides — turn by turn — whether to search notes, create a note, or just respond in text.
+**Goal:** A `POST /chat` endpoint backed by a multi-tool agent loop. Unlike `/draft` (which forces a single tool via `tool_choice`), this agent has multiple tools available and decides — turn by turn — whether to search notes, draft a note, or just respond in text. ✓
 
 **Why:** `/query`, `/ask`, and `/draft` each wrap one capability behind one endpoint with no decision-making. This phase introduces the agent-loop pattern (`tool_choice: "auto"`, multi-turn tool execution, conversation state) as its own learning milestone, distinct from Phase 12's batch/scheduling pattern.
 
-Planned components:
-- [ ] `app/assistant.py` — `_TOOLS` list (`search_notes`, `create_note`) and `run_assistant(messages)` implementing the agent loop: call model with `tool_choice: "auto"` → if `tool_use`, dispatch to the matching `app/crud/notes.py` function and append a `tool_result` → repeat until the model responds in text or a max-iteration cap is hit
-- [ ] `app/routers/assistant.py` — `POST /chat` accepts `{message, conversation_id?}` and returns the final text plus a trace of tools called
-- [ ] `static/index.html` — new "Assistant" tab with a chat-style UI, distinct from the existing single-shot Ask tab
-- [ ] `tests/test_assistant.py` — mock `messages.create` to return scripted tool-use/text responses across loop iterations; verify tool dispatch and loop termination
+Built:
+- [x] `app/assistant.py` — `_TOOLS` (`search_notes`, `create_note`) and `run_assistant(messages, db)`: call the model with `tool_choice` defaulted to `"auto"` → if `tool_use`, dispatch to the matching `app/crud/notes.py` function and append a `tool_result` → repeat until the model responds in text or the `MAX_ITERATIONS = 5` cap is hit. `create_note` is confirm-before-save — it records the proposed draft in the trace and does **not** persist
+- [x] `app/schemas/note.py` — `NOTE_TOOL_INPUT_SCHEMA` (shared `create_note` tool contract, referenced by both `agent.py` and `assistant.py`) plus the `/chat` schemas: `ChatRequest` (`{message, history}`), `ChatResponse` (`{reply, trace}`), `ToolCall`, and `ChatMessage`
+- [x] `app/routers/assistant.py` — `POST /chat`: maps `{message, history}` to the Anthropic message list and returns the final text plus a trace of tools called
+- [x] `app/main.py` — assistant router registered
+- [x] `static/index.html` — new "Assistant" tab: a chat transcript (user/assistant bubbles + a tool-call trace line), distinct from the single-shot Ask tab. `create_note` proposals render as a card with a Save button (`POST /notes`)
+- [x] `tests/test_assistant.py` — 7 tests; mock `app.assistant._client` with scripted tool-use/text responses to exercise the real loop (dispatch, termination, the iteration cap, confirm-before-save, graceful tool-error handling). 34 tests passing total
 
-**Design decisions (proposed):**
-- `tool_choice: "auto"` is the defining difference from `/draft`'s forced single tool — this is what makes it an agent rather than structured extraction
-- Launch with two tools (`search_notes` + `create_note`) — one read, one write — to keep the focus on the agent loop itself. `get_note` (by-ID fetch) and trimming search results to snippets are deferred: they're retrieval/cost optimizations, not agent-loop concepts. `search_notes` returns full notes for now (matching `search_notes_semantic`), which is why a separate `get_note` adds little in single-turn use
-- Hard cap on loop iterations (e.g. 5); if exceeded, return the model's current text plus a note that the limit was hit
-- Conversation history is client-supplied and stateless initially (like `/ask`) — no new storage until proven necessary
-- Tool execution dispatches to existing `app/crud/notes.py` functions — no duplicated business logic; the agent is a new orchestration layer over what already exists
+**Design decisions:**
+- `tool_choice: "auto"` (achieved by omitting `tool_choice`) is the defining difference from `/draft`'s forced single tool — this is what makes it an agent rather than structured extraction
+- **`create_note` is confirm-before-save (human-in-the-loop)** — the agent records the proposed draft in the response trace but never persists it; the user reviews and saves via `POST /notes`. Keeps junk out of the RAG store, consistent with `/draft`
+- **Model: Claude Haiku 4.5** (`claude-haiku-4-5-20251001`) — consistent with `/draft` and `/ask`; cheapest model, sufficient for a 2-tool loop at personal scale
+- **Hard cap `MAX_ITERATIONS = 5`** — prevents runaway looping; on cap, return the current text flagged with the limit
+- **Shared `NOTE_TOOL_INPUT_SCHEMA`** — the `create_note` tool input schema is defined once in `app/schemas/note.py` and referenced by both `agent.py` and `assistant.py`, so the note shape can't drift. Per-field descriptions live in the shared schema; each caller supplies its own top-level tool `description`
+- **Instruction placement** — trigger / when-to-call guidance lives on the tool `description`; the editorial "what makes a good note" policy lives in the `system` prompt (canonical copy is this file's "What makes a good note" section). DRY applies to contracts/schemas, not to prompt prose tuned per surface
+- **Request uses client-supplied `history`, not `conversation_id`** — makes multi-turn work statelessly now (like `/ask`); a `conversation_id` would be a no-op without server-side storage, which stays deferred. History is text-only — `tool_use`/`tool_result` blocks are not replayed across turns; the loop re-derives tool use each message
+- **`ToolCall.input` is `dict[str, Any]`** — deliberately loose so the response schema isn't coupled to the tool set; the `create_note` draft rides through this field for the UI's Save button
+- `run_assistant(messages, db)` takes the DB session — the loop needs it to dispatch tool calls to `app/crud/notes.py`
+- Launch with two tools (`search_notes` + `create_note`) — one read, one write — to keep the focus on the agent loop. `get_note` (by-ID fetch) and snippet-trimming are deferred: retrieval/cost optimizations, not agent-loop concepts
+- Tool execution dispatches to existing `app/crud/notes.py` functions — no duplicated business logic; the agent is a new orchestration layer
+- **Tests mock `app.assistant._client`, not `run_assistant`** — exercises the real loop; mocking the helper would test nothing. The `_client()` indirection is the test seam (see the Testing convention note below)
 - `/draft` remains for "I have raw content, structure it"; the assistant is for "have a conversation, the model decides what to do" — not a replacement
 
-**Risks / gotchas:**
-- Cost: a single user message can trigger multiple API calls (search → reason → maybe create) instead of `/ask`'s one
-- Runaway looping — needs the iteration cap and clear tool descriptions to avoid repeated near-duplicate `search_notes` calls
-- The "What makes a good note" criteria must be reflected in the `create_note` tool's description here too; consider a confirm-before-save step rather than silent autonomous saves, consistent with `/draft`'s human-in-the-loop design
-- Overlap with `/ask` — decide whether `/ask` stays as a simpler always-search-then-answer option or eventually folds into this
+**Open questions / follow-ups:**
+- Cost: a single user message can trigger multiple API calls (search → reason → maybe draft) instead of `/ask`'s one
+- Overlap with `/ask` — decide whether `/ask` stays as a simpler always-search-then-answer option or eventually folds into `/chat` (tracked in the Follow-ups table)
 
 ---
 
@@ -339,17 +346,20 @@ learnstack/
 │   ├── embeddings.py        # OpenAI embedding helper (text-embedding-3-small)
 │   ├── llm.py               # Anthropic client — generate_answer() for /ask
 │   ├── agent.py             # Anthropic client — draft_note() for /draft
+│   ├── assistant.py         # Anthropic client — run_assistant() agent loop for /chat
 │   ├── models/
 │   │   └── note.py          # Note ORM model, NoteType enum, embedding column
 │   ├── schemas/
 │   │   └── note.py          # All Pydantic schemas: NoteCreate, NoteUpdate, NoteResponse,
 │   │                        #   QueryRequest, QueryResult, AskRequest, AskResponse,
-│   │                        #   DraftRequest, DraftResponse
+│   │                        #   DraftRequest, DraftResponse, ChatRequest, ChatResponse,
+│   │                        #   ToolCall, ChatMessage; plus NOTE_TOOL_INPUT_SCHEMA
 │   ├── routers/
 │   │   ├── notes.py         # CRUD endpoints
 │   │   ├── query.py         # POST /query — semantic search
 │   │   ├── ask.py           # POST /ask — RAG answer generation
 │   │   ├── draft.py         # POST /draft — notes agent
+│   │   ├── assistant.py     # POST /chat — multi-tool notes assistant
 │   │   └── health.py        # GET /health — health check for Render
 │   └── crud/
 │       └── notes.py         # Database operations: create, read, update, delete, search
@@ -358,12 +368,13 @@ learnstack/
 │   ├── test_notes.py        # 10 tests — CRUD and keyword search
 │   ├── test_query.py        # 6 tests — semantic search
 │   ├── test_ask.py          # 5 tests — RAG answer endpoint
-│   └── test_draft.py        # 6 tests — notes agent endpoint
+│   ├── test_draft.py        # 6 tests — notes agent endpoint
+│   └── test_assistant.py    # 7 tests — notes assistant agent loop
 ├── alembic/                 # Migration scripts
 │   ├── env.py
 │   └── versions/
 ├── static/
-│   └── index.html           # Single-page web UI (Draft & Save, Notes, Ask, Semantic Search)
+│   └── index.html           # Single-page web UI (Draft & Save, Notes, Ask, Semantic Search, Assistant)
 ├── notes-inbox/             # Markdown notes awaiting API import
 │   └── _template.md
 ├── import_notes.py          # Batch import script (posts inbox files to API)
@@ -422,6 +433,7 @@ learnstack/
 | POST | `/query` | Semantic search — returns notes ranked by meaning with scores |
 | POST | `/ask` | RAG answer — returns a grounded answer + source notes |
 | POST | `/draft` | Notes agent — returns a structured draft note from raw pasted content |
+| POST | `/chat` | Notes assistant — multi-tool agent loop; decides whether to search, draft, or reply; returns the reply plus a tool-call trace |
 | GET | `/health` | Health check — returns `{"status": "ok"}`; used by Render |
 
 Keyword search via query param: `GET /notes?q=dbt`
@@ -482,6 +494,7 @@ Keyword search via query param: `GET /notes?q=dbt`
 - Tests live in `tests/`, mirror the structure of `app/`
 - **Review `tests/conftest.py`** to understand how the test database is created empty and torn down between runs — the fixture setup there is the source of truth for test isolation
 - **`tests/test_ask.py` and `tests/test_draft.py` use `AsyncMock`** — patch targets the name in the importing module (`app.routers.ask.generate_answer`, `app.routers.draft.draft_note`), not where it's defined. `new_callable=AsyncMock` is required because the router `await`s the function. `mock.assert_called_once()` verifies the layer was invoked exactly once per request.
+- **`tests/test_assistant.py` mocks one level deeper** — it patches `app.assistant._client` (not `run_assistant`) so the *real* agent loop runs, feeding scripted tool-use/text responses via `messages.create`'s `side_effect`. `app.assistant.notes_crud.search_notes_semantic` is also mocked to avoid real DB/embedding calls. This exercises tool dispatch, loop termination, and the `MAX_ITERATIONS` cap. The cap test supplies exactly `MAX_ITERATIONS` scripted responses, so a runaway loop would raise `StopAsyncIteration` — the test passing is itself proof the cap holds.
 
 ### Environment
 - Never commit secrets or `.env` files
@@ -531,6 +544,14 @@ Decisions made during development that future work should respect.
 | Phase 10 | `sync: false` on all env vars in `render.yaml` | API keys and DB connection strings must never be committed; Render dashboard is the right place to set them |
 | Phase 10 | `python:3.11-slim` not Alpine for `Dockerfile.app` | Alpine requires extra musl/gcc steps to compile `asyncpg`; slim avoids that without adding significant image size |
 | Phase 10 | Health endpoint has no DB ping | Render's health check just needs a 200; adding DB ping means a DB outage restarts the web service unnecessarily |
+| Phase 11 | `/chat` omits `tool_choice` (defaults to `auto`) | The model decides per turn whether to search, draft, or reply — the defining difference from `/draft`'s forced single tool, and what makes it an agent |
+| Phase 11 | `create_note` is confirm-before-save (human-in-the-loop) | Agent records the proposed draft in the response trace but never persists; user reviews and saves via `POST /notes`. Keeps junk out of the RAG store, consistent with `/draft` |
+| Phase 11 | Assistant loop backed by Claude Haiku 4.5 | Matches `/draft` and `/ask`; cheapest model, sufficient for a 2-tool loop at personal scale |
+| Phase 11 | Hard cap of 5 loop iterations (`MAX_ITERATIONS`) | Prevents runaway looping; on cap, return the current text flagged with the limit |
+| Phase 11 | `create_note` tool input schema extracted to one shared `NOTE_TOOL_INPUT_SCHEMA` | Single source of truth for the tool contract in `app/schemas/note.py`; `agent.py` and `assistant.py` both reference it so the note shape can't drift (mirrors `NoteCreate`) |
+| Phase 11 | Trigger conditions go on the tool `description`; note-quality policy goes in the `system` prompt | Trigger / when-to-call is tool-intrinsic (and only matters under `auto`); editorial policy is task-level. DRY applies to contracts, not to prompt prose tuned per surface |
+| Phase 11 | `/chat` request uses client-supplied `history`, not `conversation_id` | Multi-turn works statelessly now (like `/ask`); a `conversation_id` is a no-op without server-side conversation storage, which stays deferred. History is text-only — tool context isn't replayed across turns |
+| Phase 11 | Agent-loop tests mock `app.assistant._client`, not `run_assistant` | Exercises the real loop (dispatch, termination, cap); mocking the helper would test nothing. The `_client()` indirection is the test seam |
 
 ---
 
@@ -556,12 +577,18 @@ Items to revisit at no fixed deadline. Not deferred features — these are code 
 | `app/crud/notes.py` | No pgvector index (ivfflat/hnsw) on the `embedding` column | Not needed at personal-note scale. Add via Alembic migration if semantic search slows as the notes table grows. |
 | `app/models/note.py` | Phase 2 schema fields still unbuilt — tags, source, confidence, status | Deferred until usage patterns are clear. Revisit after the system has been in real use for a while. Requires Alembic migration + schema + CRUD updates. |
 | `app/agent.py` | URL fetching in the draft agent | `/draft` is paste-only. Future: accept a URL, fetch the content server-side, pass to the agent. Adds meaningful complexity — defer until paste workflow is well-exercised. |
+| `app/routers/ask.py`, `app/routers/assistant.py` | `/ask` vs `/chat` overlap | `/ask` is always-search-then-answer; `/chat`'s agent loop can do the same plus more. Decide whether `/ask` stays as a simpler single-shot option or eventually folds into `/chat`. |
+| `app/assistant.py` | `/chat` conversation history is text-only | The loop replays prior user/assistant text but not `tool_use`/`tool_result` blocks, so cross-turn tool context isn't preserved. Fine at current scale; revisit if multi-turn tool continuity matters. |
 
 ---
 
 ## Background on the developer
 
-The developer has 19 years of healthcare data experience with an actuarial and modeling background. Python is a growing focus, applied initially for automation. Coursera coursework in Python and pipelines. The goal is to develop backend and data engineering skills that open doors to roles in health tech and data engineering that align with his background and trajectory.
+The developer brings 19 years of healthcare data experience with a background in actuarial science, modeling, and analytics. Has owned data pipelines end-to-end across production healthcare environments — from source system extraction through transformation, delivery, and stakeholder reporting.
+
+Python and modern data engineering techniques are an active development focus. LearnStack is the primary vehicle: a deliberately sequenced project that builds backend and data engineering depth — async APIs, schema migrations, semantic search, LLM integration, agent loops, and cloud deployment — one pattern at a time.
+
+The goal is to develop backend and data engineering proficiency to the level needed to succeed independently in data engineering and analytics engineering roles, particularly in health tech where domain expertise and technical depth both carry weight.
 
 The project is deliberately chosen to build skills that transfer directly to those roles: FastAPI, Postgres, Docker, SQLAlchemy, Alembic, pytest, pgvector, LLM API integration (OpenAI, Anthropic), and RAG/semantic search.
 

@@ -192,6 +192,19 @@
     #draft-form.visible { display: block; }
 
     .sources-label { font-size: 12px; color: var(--muted); margin-bottom: 8px; font-weight: 600; }
+
+    .chat-log { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }
+    .chat-log:empty { display: none; }
+    .msg { padding: 10px 14px; border-radius: var(--radius); max-width: 85%; white-space: pre-wrap; line-height: 1.6; }
+    .msg.user { align-self: flex-end; background: #1e2a4a; }
+    .msg.assistant { align-self: flex-start; background: var(--surface); border: 1px solid var(--border); }
+    .msg.tool { align-self: flex-start; background: transparent; border: 1px dashed var(--border); color: var(--muted); font-size: 12px; padding: 6px 10px; }
+    .draft-proposal { align-self: stretch; max-width: 100%; }
+    .draft-proposal pre {
+      background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+      padding: 12px; margin-top: 8px; overflow-x: auto; white-space: pre-wrap; word-break: break-word;
+      font-family: 'Cascadia Code', 'Consolas', monospace; font-size: 12px; color: var(--text);
+    }
   </style>
 </head>
 <body>
@@ -205,6 +218,7 @@
   <button class="active" data-tab="draft">Draft &amp; Save</button>
   <button data-tab="notes">Notes</button>
   <button data-tab="ask">Ask</button>
+  <button data-tab="assistant">Assistant</button>
   <button data-tab="query">Semantic Search</button>
 </nav>
 
@@ -304,6 +318,23 @@
     <div id="ask-result" style="margin-top:16px;"></div>
   </section>
 
+  <!-- ── ASSISTANT ────────────────────────────────────────── -->
+  <section id="tab-assistant" class="tab">
+    <h2>Assistant</h2>
+    <p style="color:var(--muted);font-size:13px;margin-bottom:16px;">
+      A conversation — the assistant decides whether to search your notes, draft a new one,
+      or just reply. Proposed notes appear with a Save button; nothing is saved automatically.
+    </p>
+
+    <div id="chat-log" class="chat-log"></div>
+
+    <div class="row">
+      <input type="text" id="chat-input" placeholder="Ask about your notes, or say &quot;save a note about…&quot;" />
+      <button class="btn btn-primary" id="btn-chat">Send</button>
+    </div>
+    <div class="status" id="chat-status" style="margin-top:8px;"></div>
+  </section>
+
   <!-- ── SEMANTIC SEARCH ──────────────────────────────────── -->
   <section id="tab-query" class="tab">
     <h2>Semantic search</h2>
@@ -357,11 +388,11 @@
   }
 
   function noteTypeBadge(t) {
-    return `<span class="badge type">${t.replace(/_/g, ' ')}</span>`;
+    return `<span class="badge type">${escHtml(String(t ?? '').replace(/_/g, ' '))}</span>`;
   }
 
   function metaBadge(label, val) {
-    return val ? `<span class="badge" title="${label}">${val}</span>` : '';
+    return val ? `<span class="badge" title="${escHtml(label)}">${escHtml(val)}</span>` : '';
   }
 
   function renderNoteCard(note, opts = {}) {
@@ -601,6 +632,107 @@
 
   document.getElementById('query-q').addEventListener('keydown', e => {
     if (e.key === 'Enter') document.getElementById('btn-query').click();
+  });
+
+  // ── Assistant (chat) ───────────────────────────────────────
+  const chatLog = document.getElementById('chat-log');
+  const chatHistory = [];  // [{role, content}] — client-supplied, stateless
+
+  function appendMsg(role, text) {
+    const div = document.createElement('div');
+    div.className = 'msg ' + role;
+    div.textContent = text;
+    chatLog.appendChild(div);
+    chatLog.scrollTop = chatLog.scrollHeight;
+    return div;
+  }
+
+  function renderTrace(t) {
+    if (t.tool === 'create_note') { renderDraftProposal(t.input); return; }
+    // search_notes (or any future read tool): a compact dashed line
+    const q = t.input && t.input.query ? `"${t.input.query}"` : '';
+    appendMsg('tool', `🔍 searched notes ${q}${t.summary ? ' — ' + t.summary : ''}`.trim());
+  }
+
+  function renderDraftProposal(input) {
+    const card = document.createElement('div');
+    card.className = 'card draft-proposal';
+    card.innerHTML = `
+      <div class="sources-label">Proposed note — review and save</div>
+      <div class="note-title">${escHtml(input.title)}</div>
+      <div class="note-meta">
+        ${noteTypeBadge(input.note_type)}
+        ${metaBadge('tool', input.tool)}
+        ${metaBadge('topic', input.topic)}
+        ${metaBadge('project', input.project)}
+      </div>
+      <pre>${escHtml(input.content)}</pre>
+      <div style="display:flex;gap:10px;align-items:center;margin-top:10px;">
+        <button class="btn btn-success btn-save-draft">Save Note</button>
+        <div class="status save-draft-status"></div>
+      </div>`;
+    const btn = card.querySelector('.btn-save-draft');
+    const st = card.querySelector('.save-draft-status');
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      spin(st);
+      try {
+        await apiFetch('/notes', { method: 'POST', body: JSON.stringify({
+          title: input.title,
+          content: input.content,
+          note_type: input.note_type,
+          tool: input.tool ?? null,
+          topic: input.topic ?? null,
+          project: input.project ?? null,
+        }) });
+        setStatus(st, 'Saved.', 'ok');
+        btn.textContent = 'Saved';
+      } catch (e) {
+        setStatus(st, 'Error: ' + e.message, 'err');
+        btn.disabled = false;
+      }
+    });
+    chatLog.appendChild(card);
+    chatLog.scrollTop = chatLog.scrollHeight;
+  }
+
+  async function sendChat() {
+    const inputEl = document.getElementById('chat-input');
+    const message = inputEl.value.trim();
+    if (!message) return;
+    inputEl.value = '';
+    appendMsg('user', message);
+
+    const statusEl = document.getElementById('chat-status');
+    const btn = document.getElementById('btn-chat');
+    spin(statusEl);
+    btn.disabled = true;
+    inputEl.disabled = true;
+
+    try {
+      // Send prior turns as history; the new message is appended server-side.
+      const data = await apiFetch('/chat', {
+        method: 'POST',
+        body: JSON.stringify({ message, history: chatHistory }),
+      });
+      setStatus(statusEl, '', '');
+      (data.trace || []).forEach(renderTrace);
+      appendMsg('assistant', data.reply);
+      // Only commit to history once the round-trip succeeded.
+      chatHistory.push({ role: 'user', content: message });
+      chatHistory.push({ role: 'assistant', content: data.reply });
+    } catch (e) {
+      setStatus(statusEl, 'Error: ' + e.message, 'err');
+    } finally {
+      btn.disabled = false;
+      inputEl.disabled = false;
+      inputEl.focus();
+    }
+  }
+
+  document.getElementById('btn-chat').addEventListener('click', sendChat);
+  document.getElementById('chat-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') sendChat();
   });
 </script>
 </body>

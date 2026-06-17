@@ -79,7 +79,7 @@ def post_note(payload: dict) -> str:
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(req) as resp:
+    with urllib.request.urlopen(req, timeout=60) as resp:
         return json.loads(resp.read())["id"]
 
 
