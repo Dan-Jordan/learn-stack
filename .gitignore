@@ -20,6 +20,9 @@ notes-inbox/processed/
 # Editor / IDE (personal dev config, e.g. debug launch.json)
 .vscode/
 
+# Throwaway exploration scripts
+scratch.py
+
 # Claude Code tooling (personal dev config, e.g. launch.json for previews)
 .claude/
 
