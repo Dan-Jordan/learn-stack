@@ -46,9 +46,15 @@ When working on Phase 1–3, keep the RAG architecture in mind even when not bui
 
 Phase 11 (Notes Assistant) shipped `POST /chat` — a multi-tool agent loop (`tool_choice: "auto"`) that decides per turn whether to search notes, draft a note, or just reply — plus an Assistant chat tab in the web UI. See the Phase 11 section below.
 
-**Phase 12 — Planned next.** Phase 12 (Insights) adds a scheduled clustering pipeline over note embeddings. See the Phase 12 section below for the full plan.
+**Sequencing note:** the next two phases (CI, then Logging) are production-fundamentals work, taken deliberately ahead of the Insights and Auth feature phases. The app already auto-deploys to Render on merge to `main`, so a merge gate and runtime observability matter more right now than added features.
 
-**Phase 13 — Planned after that.** Phase 13 adds HTTP Basic Auth to the Render deployment so the app can be shared without being fully public.
+**Phase 12 — Planned next (Continuous Integration).** A GitHub Actions workflow runs the test suite against Postgres + pgvector on every pull request, and a branch-protection rule requires that check to pass before merge to `main`. See the Phase 12 section below.
+
+**Phase 13 — Planned (Logging).** Deliberate, leveled logging across the app's boundaries and error paths so the deployed app is observable. See the Phase 13 section below.
+
+**Phase 14 — Planned (Insights).** A scheduled clustering pipeline over note embeddings. See the Phase 14 section below.
+
+**Phase 15 — Planned (Authentication).** HTTP Basic Auth on the Render deployment so the app can be shared without being fully public. See the deferred list below; a full phase plan will be written when it comes up (Auth does not yet have a standalone phase section).
 
 ---
 
@@ -63,8 +69,10 @@ Phase 11 (Notes Assistant) shipped `POST /chat` — a multi-tool agent loop (`to
 | 9 | Setup script | `.\setup.ps1` from a clean clone brings the full stack up in one command |
 | 10 | Cloud deployment | LearnStack running on Render at a public URL |
 | 11 | Notes Assistant | `POST /chat` runs a multi-tool agent that decides whether to search notes, draft one, or just reply |
-| 12 | Insights | A scheduled job clusters note embeddings into topics and labels them; `/insights` shows the results |
-| 13 | Authentication | HTTP Basic Auth gates all routes; credentials set via env vars, changeable without code changes |
+| 12 | Continuous integration | GitHub Actions runs the test suite on every PR; a branch-protection rule gates merges to `main` |
+| 13 | Logging | Leveled logging across the app's boundaries and error paths; `LOG_LEVEL`-configurable and observable on Render |
+| 14 | Insights | A scheduled job clusters note embeddings into topics and labels them; `/insights` shows the results |
+| 15 | Authentication | HTTP Basic Auth gates all routes; credentials set via env vars, changeable without code changes |
 
 **Embedding model:** OpenAI text-embedding API (industry standard, fractions of a cent per note for personal use).
 
@@ -78,7 +86,7 @@ Phase 11 (Notes Assistant) shipped `POST /chat` — a multi-tool agent loop (`to
 
 **Goal:** A `POST /chat` endpoint backed by a multi-tool agent loop. Unlike `/draft` (which forces a single tool via `tool_choice`), this agent has multiple tools available and decides — turn by turn — whether to search notes, draft a note, or just respond in text. ✓
 
-**Why:** `/query`, `/ask`, and `/draft` each wrap one capability behind one endpoint with no decision-making. This phase introduces the agent-loop pattern (`tool_choice: "auto"`, multi-turn tool execution, conversation state) as its own learning milestone, distinct from Phase 12's batch/scheduling pattern.
+**Why:** `/query`, `/ask`, and `/draft` each wrap one capability behind one endpoint with no decision-making. This phase introduces the agent-loop pattern (`tool_choice: "auto"`, multi-turn tool execution, conversation state) as its own learning milestone, distinct from Phase 14's batch/scheduling pattern.
 
 Built:
 - [x] `app/assistant.py` — `_TOOLS` (`search_notes`, `create_note`) and `run_assistant(messages, db)`: call the model with `tool_choice` defaulted to `"auto"` → if `tool_use`, dispatch to the matching `app/crud/notes.py` function and append a `tool_result` → repeat until the model responds in text or the `MAX_ITERATIONS = 5` cap is hit. `create_note` is confirm-before-save — it records the proposed draft in the trace and does **not** persist
@@ -109,7 +117,61 @@ Built:
 
 ---
 
-## Phase 12 — Planned (Insights)
+## Phase 12 — Planned (Continuous Integration)
+
+**Goal:** A GitHub Actions workflow runs the full test suite against real Postgres + pgvector on every pull request, and a branch-protection rule requires that check to pass before merge to `main`.
+
+**Why:** `main` auto-deploys to Render on merge (Phase 10), but nothing currently stops a broken merge from shipping — the only safeguard is remembering to run `pytest` locally on Windows. CI closes that gap and adds a Linux test run matching the deploy target, catching environment-specific breakage before Render does. First of two production-fundamentals phases (CI, then logging) taken before resuming feature work.
+
+Planned components:
+- [ ] `.github/workflows/ci.yml` — trigger on `pull_request` and pushes to `main`; set up Python 3.11, a Postgres service container with pgvector, install `requirements.txt`, create the test database + `vector` extension, run `pytest`
+- [ ] Branch-protection rule on `main` (GitHub settings) — require the CI check to pass and the branch to be up to date before merge
+- [ ] `README.md` / `CLAUDE.md` — record the CI gate in the merge workflow
+
+**Considerations to get right (the point is the right setup, not just a green check):**
+- **Service container vs. building the local pgvector image** — the local `Dockerfile` compiles pgvector from source (~a minute); CI should use a prebuilt `pgvector/pgvector` image as a service container instead, so runs stay fast
+- **Replicating the test-DB bootstrap** — `setup.ps1` creates the test database and runs `CREATE EXTENSION vector` locally; CI has no `setup.ps1`, so that setup has to be reproduced as explicit workflow steps
+- **Secrets** — tests mock the OpenAI/Anthropic clients, so no real API keys should be required; confirm no test makes a live call before relying on that
+- **What the gate covers** — `pytest` only to start; linting / type-checking are a deliberate later addition, not part of this phase
+- **Caching** — add a pip cache for faster runs once the workflow is correct
+
+**Risks / gotchas:**
+- Postgres service-container readiness — CI must wait for `pg_isready` (the same race `setup.ps1` already handles) before migrations/tests
+- A test that silently depends on local state (a pre-seeded note, a real key) passes locally but fails in CI — surfacing those is part of the value
+- Branch protection on a solo repo can block your own merges if the check is misconfigured; confirm the workflow is green before enabling the rule
+
+---
+
+## Phase 13 — Planned (Logging)
+
+**Goal:** Deliberate, leveled logging across the app's boundaries and error paths — external API calls (OpenAI/Anthropic), database writes, and request/failure points — configured centrally and driven by an env var, so the running app (especially on Render) is debuggable.
+
+**Why:** Logging today is a root `basicConfig` in `app/main.py` plus a single `logger.exception` in `app/assistant.py`. The rest — routers, `crud/notes.py`, `embeddings.py`, `llm.py`, `agent.py` — is silent, so a failed embedding, an empty search, or a timed-out API call on Render leaves no trace. This phase makes the deployed app observable. The emphasis is on the judgment of *where* and *at what level* to log — getting the full set of considerations right, not maximizing volume.
+
+Planned components:
+- [ ] Per-module loggers (`getLogger(__name__)`) across `app/`, generalizing the pattern already in `assistant.py`
+- [ ] Log at boundaries: each OpenAI/Anthropic call (`embeddings.py`, `llm.py`, `agent.py`, `assistant.py`), note create/update/delete in `crud/notes.py`, and error paths in the routers
+- [ ] Central config: log level from a `LOG_LEVEL` env var (added to `.env.example` and `render.yaml`); a format that includes timestamp + logger name + level
+- [ ] (Stretch) request correlation — thread a request ID through the `/chat` agent loop so its multiple API calls are traceable as one unit; ties into the existing response `trace`
+- [ ] `README.md` / `CLAUDE.md` — document the level convention and `LOG_LEVEL`
+
+**Considerations to get right (the whole point — placement and level, not sprinkling):**
+- **Level discipline** — a clear rule per level: INFO for state changes ("note created", "search returned N"), WARNING for recoverable oddities (0 results, a retry), ERROR/`exception` for failures. Avoid the everything-at-INFO and `print()` anti-patterns
+- **Where to log** — at seams (request in/out, external calls, DB writes) and error paths, *not* inside pure logic where it becomes noise
+- **What must never be logged** — API keys, full embedding vectors, raw note content / anything potentially sensitive
+- **Cost of verbosity** — `httpx` is already quieted to WARNING; keep new logs from re-drowning the signal
+- **Observability vs. the response `trace`** — the `/chat` trace is user-facing; logs are for the developer. Keep the two purposes distinct
+
+**Scope boundary:** logging only. Metrics, distributed tracing, and error-aggregation services (Sentry, OpenTelemetry) are a deliberately separate, later concern — folding them in here would defeat "start simple."
+
+**Risks / gotchas:**
+- Cargo-cult logging — a `logger.info` on every function produces noise that's worse than silence; the value is entirely in placement and level
+- Wrong-level inflation — logging recoverable conditions as ERROR trains you to ignore ERROR
+- Leaking secrets/PII into logs is a real production failure mode, not a hypothetical
+
+---
+
+## Phase 14 — Planned (Insights)
 
 **Goal:** A scheduled job clusters note embeddings into topics, labels each cluster via the LLM, and stores the results so the UI can show what your notes are actually about — without asking a question.
 
@@ -559,7 +621,7 @@ Decisions made during development that future work should respect.
 
 Do not build these until the relevant phase is reached:
 
-- Authentication (Phase 13) — HTTP Basic Auth gating all routes; credentials via env vars
+- Authentication (Phase 15) — HTTP Basic Auth gating all routes; credentials via env vars
 - Job postings and application tracking — separate table with dedicated fields; not stored in notes; no target phase
 - URL fetching in the draft agent — paste-only for now; defer to a later phase
 - Multi-user support (not planned)
