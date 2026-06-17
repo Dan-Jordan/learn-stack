@@ -8,7 +8,7 @@ The destination is a **RAG-powered learning system**: a knowledge base you can h
 
 That capability — Retrieval-Augmented Generation, or RAG — is built on a simple foundation: your notes get converted into vector embeddings that encode meaning, and when you ask a question the system finds the notes whose meaning is closest to your question and hands them to the model as context. The result is answers that are grounded in what *you* know, not just what the model was trained on.
 
-LearnStack is not a second brain or an AI agent. It is a backend application that earns its complexity over time. But it is being built toward something specific: a system where your saved knowledge actively helps you keep learning.
+LearnStack is not a second brain. It is a backend application that earns its complexity over time — including, now, a multi-tool agent loop that can search your notes, draft new ones, and decide which to do on its own. But it is being built toward something specific: a system where your saved knowledge actively helps you keep learning.
 
 ---
 
@@ -93,7 +93,7 @@ A single-page web UI served by FastAPI at `http://localhost:8000/`. Four tabs: *
 LearnStack runs on [Render](https://render.com) with a managed Postgres database. `render.yaml` defines the web service and database as code. `GET /health` supports Render's health check.
 
 ### Phase 11 — Notes Assistant ✓
-`POST /chat` runs a multi-tool agent loop (`tool_choice: "auto"`) over `search_notes` and `create_note`, deciding per turn whether to search your notes, draft a new one, or just reply. Drafts are confirm-before-save — returned for review, never auto-persisted. New **Assistant** chat tab in the web UI. 33 passing tests (6 new).
+`POST /chat` runs a multi-tool agent loop (`tool_choice: "auto"`) over `search_notes` and `create_note`, deciding per turn whether to search your notes, draft a new one, or just reply. Drafts are confirm-before-save — returned for review, never auto-persisted. New **Assistant** chat tab in the web UI. 34 passing tests (7 new).
 
 ---
 

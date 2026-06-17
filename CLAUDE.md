@@ -374,7 +374,7 @@ learnstack/
 │   ├── env.py
 │   └── versions/
 ├── static/
-│   └── index.html           # Single-page web UI (Draft & Save, Notes, Ask, Semantic Search)
+│   └── index.html           # Single-page web UI (Draft & Save, Notes, Ask, Semantic Search, Assistant)
 ├── notes-inbox/             # Markdown notes awaiting API import
 │   └── _template.md
 ├── import_notes.py          # Batch import script (posts inbox files to API)
@@ -584,7 +584,11 @@ Items to revisit at no fixed deadline. Not deferred features — these are code 
 
 ## Background on the developer
 
-The developer has 19 years of healthcare data experience with an actuarial and modeling background. Python is a growing focus, applied initially for automation. Coursera coursework in Python and pipelines. The goal is to develop backend and data engineering skills that open doors to roles in health tech and data engineering that align with his background and trajectory.
+The developer brings 19 years of healthcare data experience with a background in actuarial science, modeling, and analytics. Has owned data pipelines end-to-end across production healthcare environments — from source system extraction through transformation, delivery, and stakeholder reporting.
+
+Python and modern data engineering techniques are an active development focus. LearnStack is the primary vehicle: a deliberately sequenced project that builds backend and data engineering depth — async APIs, schema migrations, semantic search, LLM integration, agent loops, and cloud deployment — one pattern at a time.
+
+The goal is to develop backend and data engineering proficiency to the level needed to succeed independently in data engineering and analytics engineering roles, particularly in health tech where domain expertise and technical depth both carry weight.
 
 The project is deliberately chosen to build skills that transfer directly to those roles: FastAPI, Postgres, Docker, SQLAlchemy, Alembic, pytest, pgvector, LLM API integration (OpenAI, Anthropic), and RAG/semantic search.
 
