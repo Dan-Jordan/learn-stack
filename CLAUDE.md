@@ -42,9 +42,9 @@ When working on Phase 1–3, keep the RAG architecture in mind even when not bui
 
 ## Current phase
 
-**Phase 12 — Complete ✓ (one manual step remaining)**
+**Phase 12 — Complete ✓**
 
-Phase 12 (Continuous Integration) shipped `.github/workflows/ci.yml` — `pytest` runs on every PR and push to `main` against a `pgvector/pgvector:pg15` service container, with **no API keys required**: an autouse fixture mocks the embedding seam and the LLM clients are already mocked. See the Phase 12 section below. **Remaining manual step:** enable the branch-protection rule on `main` in GitHub settings once the workflow has a green run.
+Phase 12 (Continuous Integration) shipped `.github/workflows/ci.yml` — `pytest` runs on every PR and push to `main` against a `pgvector/pgvector:pg15` service container, with **no API keys required**: an autouse fixture mocks the embedding seam and the LLM clients are already mocked. A branch-protection ruleset on `main` now requires the CI `test` check to pass before merge, closing the gap in front of Render's auto-deploy. See the Phase 12 section below.
 
 **Sequencing note:** the next phase (Logging) is the second of two production-fundamentals phases, taken deliberately ahead of the Insights and Auth feature phases. The app already auto-deploys to Render on merge to `main`, so a merge gate and runtime observability matter more right now than added features.
 
@@ -115,9 +115,9 @@ Built:
 
 ---
 
-## Phase 12 — Complete ✓ (one manual step remaining)
+## Phase 12 — Complete ✓
 
-**Goal:** A GitHub Actions workflow runs the full test suite against real Postgres + pgvector on every pull request, and a branch-protection rule requires that check to pass before merge to `main`. ✓ (workflow shipped; branch-protection rule is the remaining manual GitHub-settings step)
+**Goal:** A GitHub Actions workflow runs the full test suite against real Postgres + pgvector on every pull request, and a branch-protection rule requires that check to pass before merge to `main`. ✓
 
 **Why:** `main` auto-deploys to Render on merge (Phase 10), but nothing currently stops a broken merge from shipping — the only safeguard was remembering to run `pytest` locally on Windows. CI closes that gap and adds a Linux test run matching the deploy target, catching environment-specific breakage before Render does. First of two production-fundamentals phases (CI, then logging) taken before resuming feature work.
 
@@ -126,9 +126,9 @@ Built:
 - [x] `tests/conftest.py` — autouse `mock_embeddings` fixture patches `app.crud.notes.embed_text` (the single seam feeding both the note-write and semantic-query paths) with a deterministic stand-in, so the suite needs no `OPENAI_API_KEY`
 - [x] `tests/test_query.py` — `test_semantic_query_ranking` rewritten to inject **controlled** vectors (query ≡ SQLAlchemy note → score 1.0; Docker note orthogonal → score 0.0), testing the ordering/scoring code deterministically with no live call. Every test now runs on every PR — no skips, no marker
 - [x] `README.md` / `CLAUDE.md` — CI gate and the no-secrets testing approach documented
-- [ ] **Manual:** branch-protection rule on `main` (GitHub settings) — require the CI check to pass and the branch to be up to date before merge. Enable only after the workflow has a green run on a PR
+- [x] Branch-protection ruleset on `main` (GitHub settings) — requires the CI `test` check to pass and the branch to be up to date before merge; PRs required with **0 required approvals** (solo repo); deletions and force-pushes blocked. Enabled after the first green CI run on a PR
 
-Verified: `pytest` with no keys → 34 passed, 0 skipped — the entire suite (including ranking) runs deterministically and offline.
+Verified: `pytest` with no keys → 34 passed, 0 skipped — the entire suite (including ranking) runs deterministically and offline. The first PR's CI run surfaced a real gap (the app required `DATABASE_URL` at import; not set in CI) — fixed in `ci.yml`, then green.
 
 **Design decisions:**
 - **Mock the embedding call rather than give CI a real `OPENAI_API_KEY`** — a merge gate must be deterministic and self-contained; a live model call can flake on model drift, network, or rate limits, and a gate that goes red for reasons unrelated to the diff trains you to ignore red. CI tests *your* code, not OpenAI's model. No secret also keeps the key out of CI entirely, consistent with `render.yaml`'s `sync: false` posture. The discovery that drove this: contrary to the original plan's assumption, most of the suite (`test_notes`, `test_query`, `test_ask`) made **live** embedding calls — it was never actually mocked
@@ -139,7 +139,8 @@ Verified: `pytest` with no keys → 34 passed, 0 skipped — the entire suite (i
 - **Gate covers `pytest` only** — linting / type-checking are a deliberate later addition, not part of this phase
 
 **Risks / gotchas (carried forward):**
-- Branch protection on a solo repo can block your own merges if the check is misconfigured — confirm the workflow is green on a PR before enabling the rule (why it's left as a manual step)
+- Branch protection on a solo repo can block your own merges if misconfigured — enabled only after a green PR run, and configured safely: **Required approvals: 0** (GitHub won't let you approve your own PR, so ≥1 would lock you out), with admin bypass left available as an escape hatch
+- The app reads `DATABASE_URL` at import time, so CI must set it even though tests override the DB session — logged as a Follow-up (lazy engine init would remove the requirement)
 
 ---
 
@@ -623,6 +624,7 @@ Decisions made during development that future work should respect.
 | Phase 12 | One autouse fixture patches the single `embed_text` seam | Both the note-write and semantic-query paths funnel through `app.crud.notes.embed_text`, so one patch removes every live call. The stub is content-derived with non-negative components, keeping similarity scores in the `[0, 1]` range tests assert |
 | Phase 12 | Ranking test uses controlled vectors, not the real API | Tests LearnStack's ordering/scoring code (deterministic, yours) rather than OpenAI's semantic quality (not yours). Runs in CI on every PR with no key — avoids a `skipif`-gated live test that silently never runs (pytest doesn't load `.env`). Live smoke checks, if ever wanted, belong in a separate scheduled workflow, not the gate |
 | Phase 12 | Prebuilt `pgvector/pgvector:pg15` service container; `create_all` (not Alembic) in CI | Avoids compiling pgvector from source like the local `Dockerfile`. `conftest.py` builds the schema from ORM models, so CI only needs the `vector` extension present — no migration step for the test run |
+| Phase 12 | Branch protection via ruleset: require the `test` check; require PR with **0 approvals**; keep admin bypass | On a solo repo, ≥1 required approval permanently blocks merges (you can't approve your own PR); 0 approvals still forces changes through the gated PR. Admin bypass left on so a misconfigured rule can't lock you out of your own repo |
 
 ---
 
