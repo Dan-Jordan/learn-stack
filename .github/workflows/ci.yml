@@ -29,7 +29,11 @@ jobs:
           --health-retries 5
 
     env:
-      # conftest reads this; asyncpg driver for the app, plain URL for psql below.
+      # app/database.py reads DATABASE_URL at import time and there is no .env in
+      # CI. Tests override the DB session with TEST_DATABASE_URL, so the app's
+      # module-level engine is never used for queries — but the import must still
+      # succeed, so point DATABASE_URL at the same service-container database.
+      DATABASE_URL: postgresql+asyncpg://postgres:password@localhost:5432/learnstack_test
       TEST_DATABASE_URL: postgresql+asyncpg://postgres:password@localhost:5432/learnstack_test
       # No OPENAI_API_KEY / ANTHROPIC_API_KEY: the suite mocks the embedding seam
       # and the LLM clients, so CI needs no secrets and makes no live API calls.
