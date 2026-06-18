@@ -95,6 +95,9 @@ LearnStack runs on [Render](https://render.com) with a managed Postgres database
 ### Phase 11 — Notes Assistant ✓
 `POST /chat` runs a multi-tool agent loop (`tool_choice: "auto"`) over `search_notes` and `create_note`, deciding per turn whether to search your notes, draft a new one, or just reply. Drafts are confirm-before-save — returned for review, never auto-persisted. New **Assistant** chat tab in the web UI. 34 passing tests (7 new).
 
+### Phase 12 — Continuous integration ✓
+A GitHub Actions workflow (`.github/workflows/ci.yml`) runs the full test suite against a `pgvector/pgvector:pg15` service container on every pull request and push to `main`. The suite mocks the embedding seam and the LLM clients, so CI needs **no API keys and makes no live calls**. A branch-protection rule on `main` requires the CI check to pass before merge — the gate in front of Render's auto-deploy.
+
 ---
 
 ## Getting started
@@ -140,6 +143,12 @@ pytest
 ```
 
 The test database is created automatically by `setup.ps1`. If you ever destroy volumes with `docker compose down -v`, re-run `.\setup.ps1` to recreate it.
+
+Tests run without any API keys and make no live calls: an autouse fixture in `tests/conftest.py` patches the OpenAI embedding call with a deterministic stand-in, and the LLM-backed tests mock their Anthropic clients. The whole suite runs on every PR — no tests are skipped. The semantic-ranking test injects controlled vectors so it verifies the ordering and scoring logic deterministically, rather than depending on a live model.
+
+### Continuous integration
+
+Every pull request and push to `main` triggers `.github/workflows/ci.yml`, which runs `pytest` on Linux against a `pgvector/pgvector:pg15` service container — matching the deploy target and catching environment-specific breakage before Render does. Because the suite mocks all external API calls, CI requires no secrets. A branch-protection rule on `main` requires this check to pass before merge.
 
 ---
 

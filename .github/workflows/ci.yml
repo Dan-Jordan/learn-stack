@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    # Prebuilt pgvector image — avoids compiling the extension from source the
+    # way the local Dockerfile does, so the service container starts in seconds.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: learnstack_test
+        ports:
+          - 5432:5432
+        # Wait for Postgres to accept connections before any step runs — the
+        # same readiness race setup.ps1 handles locally with pg_isready.
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      # conftest reads this; asyncpg driver for the app, plain URL for psql below.
+      TEST_DATABASE_URL: postgresql+asyncpg://postgres:password@localhost:5432/learnstack_test
+      # No OPENAI_API_KEY / ANTHROPIC_API_KEY: the suite mocks the embedding seam
+      # and the LLM clients, so CI needs no secrets and makes no live API calls.
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Enable pgvector extension
+        # conftest builds the schema via Base.metadata.create_all, which needs
+        # the vector type to already exist. The service container created the
+        # database; this adds the extension (setup.ps1 step 6, reproduced).
+        run: psql "postgresql://postgres:password@localhost:5432/learnstack_test" -c "CREATE EXTENSION IF NOT EXISTS vector;"
+
+      - name: Run tests
+        run: pytest

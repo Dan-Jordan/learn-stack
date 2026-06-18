@@ -1,5 +1,13 @@
+from unittest.mock import AsyncMock, patch
+
 import pytest
 from httpx import AsyncClient
+
+
+def _unit_vector(index: int, dim: int = 1536) -> list[float]:
+    vec = [0.0] * dim
+    vec[index] = 1.0
+    return vec
 
 SQLALCHEMY_NOTE = {
     "title": "SQLAlchemy async session management",
@@ -60,13 +68,34 @@ async def test_semantic_query_result_has_note_fields(client: AsyncClient):
 
 
 async def test_semantic_query_ranking(client: AsyncClient):
-    await client.post("/notes", json=SQLALCHEMY_NOTE)
-    await client.post("/notes", json=DOCKER_NOTE)
-    results = (await client.post("/query", json={"q": "how do SQLAlchemy sessions work"})).json()
+    # Deterministic test of MY ranking/scoring code (closest vector first,
+    # score = 1 - cosine_distance) using controlled embeddings — no live API.
+    # The query shares its vector with the SQLAlchemy note (distance 0 -> score 1.0);
+    # the Docker note is orthogonal (distance 1 -> score 0.0). Verifies the query
+    # path orders by distance and computes scores correctly.
+    query = "which note is closest"
+    vectors = {
+        SQLALCHEMY_NOTE["content"]: _unit_vector(0),
+        DOCKER_NOTE["content"]: _unit_vector(1),
+        query: _unit_vector(0),
+    }
+
+    async def fake_embed(text: str) -> list[float]:
+        return vectors[text]
+
+    # Patch over the suite-wide stub so creates AND the query use these vectors.
+    with patch("app.crud.notes.embed_text", new=AsyncMock(side_effect=fake_embed)):
+        await client.post("/notes", json=SQLALCHEMY_NOTE)
+        await client.post("/notes", json=DOCKER_NOTE)
+        results = (await client.post("/query", json={"q": query})).json()
+
     assert len(results) == 2
-    # The SQLAlchemy note should rank above the Docker note
+    # The SQLAlchemy note (identical vector) ranks above the orthogonal Docker note.
     assert results[0]["title"] == SQLALCHEMY_NOTE["title"]
+    assert results[1]["title"] == DOCKER_NOTE["title"]
     assert results[0]["score"] > results[1]["score"]
+    assert results[0]["score"] == pytest.approx(1.0)
+    assert results[1]["score"] == pytest.approx(0.0)
 
 
 async def test_semantic_query_respects_limit(client: AsyncClient):
