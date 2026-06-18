@@ -42,15 +42,13 @@ When working on Phase 1–3, keep the RAG architecture in mind even when not bui
 
 ## Current phase
 
-**Phase 11 — Complete ✓**
+**Phase 12 — Complete ✓**
 
-Phase 11 (Notes Assistant) shipped `POST /chat` — a multi-tool agent loop (`tool_choice: "auto"`) that decides per turn whether to search notes, draft a note, or just reply — plus an Assistant chat tab in the web UI. See the Phase 11 section below.
+Phase 12 (Continuous Integration) shipped `.github/workflows/ci.yml` — `pytest` runs on every PR and push to `main` against a `pgvector/pgvector:pg15` service container, with **no API keys required**: an autouse fixture mocks the embedding seam and the LLM clients are already mocked. A branch-protection ruleset on `main` now requires the CI `test` check to pass before merge, closing the gap in front of Render's auto-deploy. See the Phase 12 section below.
 
-**Sequencing note:** the next two phases (CI, then Logging) are production-fundamentals work, taken deliberately ahead of the Insights and Auth feature phases. The app already auto-deploys to Render on merge to `main`, so a merge gate and runtime observability matter more right now than added features.
+**Sequencing note:** the next phase (Logging) is the second of two production-fundamentals phases, taken deliberately ahead of the Insights and Auth feature phases. The app already auto-deploys to Render on merge to `main`, so a merge gate and runtime observability matter more right now than added features.
 
-**Phase 12 — Planned next (Continuous Integration).** A GitHub Actions workflow runs the test suite against Postgres + pgvector on every pull request, and a branch-protection rule requires that check to pass before merge to `main`. See the Phase 12 section below.
-
-**Phase 13 — Planned (Logging).** Deliberate, leveled logging across the app's boundaries and error paths so the deployed app is observable. See the Phase 13 section below.
+**Phase 13 — Planned next (Logging).** Deliberate, leveled logging across the app's boundaries and error paths so the deployed app is observable. See the Phase 13 section below.
 
 **Phase 14 — Planned (Insights).** A scheduled clustering pipeline over note embeddings. See the Phase 14 section below.
 
@@ -117,28 +115,32 @@ Built:
 
 ---
 
-## Phase 12 — Planned (Continuous Integration)
+## Phase 12 — Complete ✓
 
-**Goal:** A GitHub Actions workflow runs the full test suite against real Postgres + pgvector on every pull request, and a branch-protection rule requires that check to pass before merge to `main`.
+**Goal:** A GitHub Actions workflow runs the full test suite against real Postgres + pgvector on every pull request, and a branch-protection rule requires that check to pass before merge to `main`. ✓
 
-**Why:** `main` auto-deploys to Render on merge (Phase 10), but nothing currently stops a broken merge from shipping — the only safeguard is remembering to run `pytest` locally on Windows. CI closes that gap and adds a Linux test run matching the deploy target, catching environment-specific breakage before Render does. First of two production-fundamentals phases (CI, then logging) taken before resuming feature work.
+**Why:** `main` auto-deploys to Render on merge (Phase 10), but nothing currently stops a broken merge from shipping — the only safeguard was remembering to run `pytest` locally on Windows. CI closes that gap and adds a Linux test run matching the deploy target, catching environment-specific breakage before Render does. First of two production-fundamentals phases (CI, then logging) taken before resuming feature work.
 
-Planned components:
-- [ ] `.github/workflows/ci.yml` — trigger on `pull_request` and pushes to `main`; set up Python 3.11, a Postgres service container with pgvector, install `requirements.txt`, create the test database + `vector` extension, run `pytest`
-- [ ] Branch-protection rule on `main` (GitHub settings) — require the CI check to pass and the branch to be up to date before merge
-- [ ] `README.md` / `CLAUDE.md` — record the CI gate in the merge workflow
+Built:
+- [x] `.github/workflows/ci.yml` — triggers on `pull_request` and pushes to `main`; Python 3.11 with pip cache, a `pgvector/pgvector:pg15` service container (health-checked with `pg_isready`), `pip install -r requirements.txt`, `CREATE EXTENSION IF NOT EXISTS vector`, then `pytest`. No secrets configured — the suite makes no live API calls
+- [x] `tests/conftest.py` — autouse `mock_embeddings` fixture patches `app.crud.notes.embed_text` (the single seam feeding both the note-write and semantic-query paths) with a deterministic stand-in, so the suite needs no `OPENAI_API_KEY`
+- [x] `tests/test_query.py` — `test_semantic_query_ranking` rewritten to inject **controlled** vectors (query ≡ SQLAlchemy note → score 1.0; Docker note orthogonal → score 0.0), testing the ordering/scoring code deterministically with no live call. Every test now runs on every PR — no skips, no marker
+- [x] `README.md` / `CLAUDE.md` — CI gate and the no-secrets testing approach documented
+- [x] Branch-protection ruleset on `main` (GitHub settings) — requires the CI `test` check to pass and the branch to be up to date before merge; PRs required with **0 required approvals** (solo repo); deletions and force-pushes blocked. Enabled after the first green CI run on a PR
 
-**Considerations to get right (the point is the right setup, not just a green check):**
-- **Service container vs. building the local pgvector image** — the local `Dockerfile` compiles pgvector from source (~a minute); CI should use a prebuilt `pgvector/pgvector` image as a service container instead, so runs stay fast
-- **Replicating the test-DB bootstrap** — `setup.ps1` creates the test database and runs `CREATE EXTENSION vector` locally; CI has no `setup.ps1`, so that setup has to be reproduced as explicit workflow steps
-- **Secrets** — tests mock the OpenAI/Anthropic clients, so no real API keys should be required; confirm no test makes a live call before relying on that
-- **What the gate covers** — `pytest` only to start; linting / type-checking are a deliberate later addition, not part of this phase
-- **Caching** — add a pip cache for faster runs once the workflow is correct
+Verified: `pytest` with no keys → 34 passed, 0 skipped — the entire suite (including ranking) runs deterministically and offline. The first PR's CI run surfaced a real gap (the app required `DATABASE_URL` at import; not set in CI) — fixed in `ci.yml`, then green.
 
-**Risks / gotchas:**
-- Postgres service-container readiness — CI must wait for `pg_isready` (the same race `setup.ps1` already handles) before migrations/tests
-- A test that silently depends on local state (a pre-seeded note, a real key) passes locally but fails in CI — surfacing those is part of the value
-- Branch protection on a solo repo can block your own merges if the check is misconfigured; confirm the workflow is green before enabling the rule
+**Design decisions:**
+- **Mock the embedding call rather than give CI a real `OPENAI_API_KEY`** — a merge gate must be deterministic and self-contained; a live model call can flake on model drift, network, or rate limits, and a gate that goes red for reasons unrelated to the diff trains you to ignore red. CI tests *your* code, not OpenAI's model. No secret also keeps the key out of CI entirely, consistent with `render.yaml`'s `sync: false` posture. The discovery that drove this: contrary to the original plan's assumption, most of the suite (`test_notes`, `test_query`, `test_ask`) made **live** embedding calls — it was never actually mocked
+- **One autouse fixture patching a single seam (`embed_text`)** — both the write path and the query path funnel through it, so one patch neutralizes every live call. The stub is content-derived (deterministic per text) with non-negative components, which keeps cosine distance in `[0, 1]` and similarity scores in the `[0, 1]` range the tests assert
+- **Ranking test uses controlled vectors, not the real API** — `test_semantic_query_ranking` asserts that the closest vector ranks first with the right score. The thing worth testing is *LearnStack's* ordering/scoring code, which is deterministic; *OpenAI's* semantic quality is its own concern and isn't LearnStack's to test. By injecting known vectors the test runs in CI on every PR with no key — rather than a `skipif`-gated live test that silently never runs (pytest doesn't load `.env`, so it would skip even locally). If a live smoke check of real embeddings is ever wanted, the right home is a separate scheduled workflow with a secret, not a test in the merge gate — deferred as over-engineering at personal scale
+- **Prebuilt `pgvector/pgvector:pg15` service container** — avoids compiling pgvector from source the way the local `Dockerfile` does, so runs stay fast
+- **`create_all`, not Alembic, in CI** — `conftest.py` builds the schema directly from the ORM models, so CI only needs the `vector` extension present (the service container creates the database via `POSTGRES_DB`); no migration step is required for the test run
+- **Gate covers `pytest` only** — linting / type-checking are a deliberate later addition, not part of this phase
+
+**Risks / gotchas (carried forward):**
+- Branch protection on a solo repo can block your own merges if misconfigured — enabled only after a green PR run, and configured safely: **Required approvals: 0** (GitHub won't let you approve your own PR, so ≥1 would lock you out), with admin bypass left available as an escape hatch
+- The app reads `DATABASE_URL` at import time, so CI must set it even though tests override the DB session — logged as a Follow-up (lazy engine init would remove the requirement)
 
 ---
 
@@ -425,8 +427,11 @@ learnstack/
 │   │   └── health.py        # GET /health — health check for Render
 │   └── crud/
 │       └── notes.py         # Database operations: create, read, update, delete, search
+├── .github/
+│   └── workflows/
+│       └── ci.yml           # GitHub Actions: pytest on every PR/push against pgvector service container
 ├── tests/
-│   ├── conftest.py          # Test database setup and teardown fixture
+│   ├── conftest.py          # Test DB setup/teardown + autouse embedding mock (no API key needed)
 │   ├── test_notes.py        # 10 tests — CRUD and keyword search
 │   ├── test_query.py        # 6 tests — semantic search
 │   ├── test_ask.py          # 5 tests — RAG answer endpoint
@@ -557,6 +562,7 @@ Keyword search via query param: `GET /notes?q=dbt`
 - **Review `tests/conftest.py`** to understand how the test database is created empty and torn down between runs — the fixture setup there is the source of truth for test isolation
 - **`tests/test_ask.py` and `tests/test_draft.py` use `AsyncMock`** — patch targets the name in the importing module (`app.routers.ask.generate_answer`, `app.routers.draft.draft_note`), not where it's defined. `new_callable=AsyncMock` is required because the router `await`s the function. `mock.assert_called_once()` verifies the layer was invoked exactly once per request.
 - **`tests/test_assistant.py` mocks one level deeper** — it patches `app.assistant._client` (not `run_assistant`) so the *real* agent loop runs, feeding scripted tool-use/text responses via `messages.create`'s `side_effect`. `app.assistant.notes_crud.search_notes_semantic` is also mocked to avoid real DB/embedding calls. This exercises tool dispatch, loop termination, and the `MAX_ITERATIONS` cap. The cap test supplies exactly `MAX_ITERATIONS` scripted responses, so a runaway loop would raise `StopAsyncIteration` — the test passing is itself proof the cap holds.
+- **Embeddings are mocked suite-wide by an autouse fixture (`mock_embeddings` in `conftest.py`)** — it patches `app.crud.notes.embed_text`, the single seam both the note-write and semantic-query paths use, with a deterministic content-derived stub. This is what lets the whole suite (and CI) run with **no `OPENAI_API_KEY`** and make no live calls — every test runs on every PR, no skips. A test that needs *specific* embedding values (e.g. `test_semantic_query_ranking`) patches `app.crud.notes.embed_text` again inside the test with controlled vectors; the inner patch wins while active. Note: tests do **not** make live API calls — don't add a `skipif`-on-key test, since pytest doesn't load `.env` and it would silently never run. A genuine live smoke check belongs in a separate scheduled workflow with a secret, not in this suite.
 
 ### Environment
 - Never commit secrets or `.env` files
@@ -614,6 +620,11 @@ Decisions made during development that future work should respect.
 | Phase 11 | Trigger conditions go on the tool `description`; note-quality policy goes in the `system` prompt | Trigger / when-to-call is tool-intrinsic (and only matters under `auto`); editorial policy is task-level. DRY applies to contracts, not to prompt prose tuned per surface |
 | Phase 11 | `/chat` request uses client-supplied `history`, not `conversation_id` | Multi-turn works statelessly now (like `/ask`); a `conversation_id` is a no-op without server-side conversation storage, which stays deferred. History is text-only — tool context isn't replayed across turns |
 | Phase 11 | Agent-loop tests mock `app.assistant._client`, not `run_assistant` | Exercises the real loop (dispatch, termination, cap); mocking the helper would test nothing. The `_client()` indirection is the test seam |
+| Phase 12 | CI mocks the embedding call instead of using a real `OPENAI_API_KEY` | A merge gate must be deterministic and self-contained; live model calls flake on drift/network/rate limits and train you to ignore red. CI tests your code, not OpenAI's model — and no secret keeps the key out of CI, consistent with `render.yaml`'s `sync: false` |
+| Phase 12 | One autouse fixture patches the single `embed_text` seam | Both the note-write and semantic-query paths funnel through `app.crud.notes.embed_text`, so one patch removes every live call. The stub is content-derived with non-negative components, keeping similarity scores in the `[0, 1]` range tests assert |
+| Phase 12 | Ranking test uses controlled vectors, not the real API | Tests LearnStack's ordering/scoring code (deterministic, yours) rather than OpenAI's semantic quality (not yours). Runs in CI on every PR with no key — avoids a `skipif`-gated live test that silently never runs (pytest doesn't load `.env`). Live smoke checks, if ever wanted, belong in a separate scheduled workflow, not the gate |
+| Phase 12 | Prebuilt `pgvector/pgvector:pg15` service container; `create_all` (not Alembic) in CI | Avoids compiling pgvector from source like the local `Dockerfile`. `conftest.py` builds the schema from ORM models, so CI only needs the `vector` extension present — no migration step for the test run |
+| Phase 12 | Branch protection via ruleset: require the `test` check; require PR with **0 approvals**; keep admin bypass | On a solo repo, ≥1 required approval permanently blocks merges (you can't approve your own PR); 0 approvals still forces changes through the gated PR. Admin bypass left on so a misconfigured rule can't lock you out of your own repo |
 
 ---
 
@@ -641,6 +652,7 @@ Items to revisit at no fixed deadline. Not deferred features — these are code 
 | `app/agent.py` | URL fetching in the draft agent | `/draft` is paste-only. Future: accept a URL, fetch the content server-side, pass to the agent. Adds meaningful complexity — defer until paste workflow is well-exercised. |
 | `app/routers/ask.py`, `app/routers/assistant.py` | `/ask` vs `/chat` overlap | `/ask` is always-search-then-answer; `/chat`'s agent loop can do the same plus more. Decide whether `/ask` stays as a simpler single-shot option or eventually folds into `/chat`. |
 | `app/assistant.py` | `/chat` conversation history is text-only | The loop replays prior user/assistant text but not `tool_use`/`tool_result` blocks, so cross-turn tool context isn't preserved. Fine at current scale; revisit if multi-turn tool continuity matters. |
+| `app/database.py` | Engine + `DATABASE_URL` check run at import time | Importing the module requires a live `DATABASE_URL` and builds the engine eagerly — which is why CI had to set `DATABASE_URL` even though tests override the session. The lazy-init pattern used by `_client()` in `agent.py`/`llm.py`/`embeddings.py` would defer this so import doesn't depend on env. Low priority; the CI env var is a fine workaround. |
 
 ---
 
