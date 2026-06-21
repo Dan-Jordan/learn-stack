@@ -1,7 +1,10 @@
+import logging
 import os
 from anthropic import AsyncAnthropic
 from app.schemas.note import NoteCreate, NOTE_TOOL_INPUT_SCHEMA
 from app.models.note import NoteType
+
+logger = logging.getLogger(__name__)
 
 
 def _client() -> AsyncAnthropic:
@@ -20,6 +23,8 @@ _DRAFT_TOOL = {
 
 
 async def draft_note(raw_content: str) -> NoteCreate:
+    # INFO: one discrete user-facing operation per /draft. Size only, not the raw content.
+    logger.info("Drafting note from raw content (%d chars)", len(raw_content))
     message = await _client().messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=1024,
@@ -49,6 +54,7 @@ async def draft_note(raw_content: str) -> NoteCreate:
     tool_use = next(b for b in message.content if b.type == "tool_use")
     inputs = tool_use.input
 
+    logger.info("Drafted note (type=%s, title=%r)", inputs["note_type"], inputs.get("title"))
     return NoteCreate(
         title=inputs["title"],
         content=inputs["content"],

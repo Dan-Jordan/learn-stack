@@ -1,6 +1,9 @@
+import logging
 import os
 from anthropic import AsyncAnthropic
 from app.models.note import Note
+
+logger = logging.getLogger(__name__)
 
 
 def _client() -> AsyncAnthropic:
@@ -22,6 +25,10 @@ async def generate_answer(question: str, context_notes: list[tuple[Note, float]]
 
     user_message = f"Notes:\n{context}\n\nQuestion: {question}" if context else f"Question: {question}"
 
+    # INFO: one discrete user-facing operation per /ask, and a visible breadcrumb right before
+    # the call — so a failure needs no extra wrap here (the ASGI handler logs the traceback).
+    # Count, not the question text.
+    logger.info("Generating answer from %d context note(s)", len(context_notes))
     message = await _client().messages.create(
         model="claude-haiku-4-5-20251001",
         max_tokens=1024,
