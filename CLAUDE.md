@@ -42,15 +42,13 @@ When working on Phase 1–3, keep the RAG architecture in mind even when not bui
 
 ## Current phase
 
-**Phase 12 — Complete ✓**
+**Phase 13 — Complete ✓**
 
-Phase 12 (Continuous Integration) shipped `.github/workflows/ci.yml` — `pytest` runs on every PR and push to `main` against a `pgvector/pgvector:pg15` service container, with **no API keys required**: an autouse fixture mocks the embedding seam and the LLM clients are already mocked. A branch-protection ruleset on `main` now requires the CI `test` check to pass before merge, closing the gap in front of Render's auto-deploy. See the Phase 12 section below.
+Phase 13 (Logging) added deliberate, leveled logging across the app's boundaries and error paths, driven by a `LOG_LEVEL` env var so the deployed app is observable on Render. Per-module loggers now sit at every external-call seam (`embeddings.py`, `llm.py`, `agent.py`, `assistant.py`) and on note create/update/delete plus semantic search in `crud/notes.py`. The emphasis was judgment — *where* and *at what level* to log — not volume: routers were deliberately left unlogged because uvicorn already covers request access and unhandled tracebacks. See the Phase 13 section below.
 
-**Sequencing note:** the next phase (Logging) is the second of two production-fundamentals phases, taken deliberately ahead of the Insights and Auth feature phases. The app already auto-deploys to Render on merge to `main`, so a merge gate and runtime observability matter more right now than added features.
+Phase 13 completes the two production-fundamentals phases (CI, then logging) taken ahead of the remaining feature work. The app auto-deploys to Render on merge to `main`, so a merge gate and runtime observability mattered more right now than added features.
 
-**Phase 13 — Planned next (Logging).** Deliberate, leveled logging across the app's boundaries and error paths so the deployed app is observable. See the Phase 13 section below.
-
-**Phase 14 — Planned (Insights).** A scheduled clustering pipeline over note embeddings. See the Phase 14 section below.
+**Phase 14 — Planned next (Insights).** A scheduled clustering pipeline over note embeddings. See the Phase 14 section below.
 
 **Phase 15 — Planned (Authentication).** HTTP Basic Auth on the Render deployment so the app can be shared without being fully public. See the deferred list below; a full phase plan will be written when it comes up (Auth does not yet have a standalone phase section).
 
@@ -144,32 +142,37 @@ Verified: `pytest` with no keys → 34 passed, 0 skipped — the entire suite (i
 
 ---
 
-## Phase 13 — Planned (Logging)
+## Phase 13 — Complete ✓
 
-**Goal:** Deliberate, leveled logging across the app's boundaries and error paths — external API calls (OpenAI/Anthropic), database writes, and request/failure points — configured centrally and driven by an env var, so the running app (especially on Render) is debuggable.
+**Goal:** Deliberate, leveled logging across the app's boundaries and error paths — external API calls (OpenAI/Anthropic), database writes, and failure points — configured centrally and driven by an env var, so the running app (especially on Render) is debuggable. ✓
 
-**Why:** Logging today is a root `basicConfig` in `app/main.py` plus a single `logger.exception` in `app/assistant.py`. The rest — routers, `crud/notes.py`, `embeddings.py`, `llm.py`, `agent.py` — is silent, so a failed embedding, an empty search, or a timed-out API call on Render leaves no trace. This phase makes the deployed app observable. The emphasis is on the judgment of *where* and *at what level* to log — getting the full set of considerations right, not maximizing volume.
+**Why:** Logging before this phase was a root `basicConfig` in `app/main.py` plus a single `logger.exception` in `app/assistant.py`. The rest — `crud/notes.py`, `embeddings.py`, `llm.py`, `agent.py` — was silent, so a failed embedding, an empty search, or a timed-out API call on Render left no useful trace. This phase made the deployed app observable. The emphasis was the judgment of *where* and *at what level* to log — getting the full set of considerations right, not maximizing volume.
 
-Planned components:
-- [ ] Per-module loggers (`getLogger(__name__)`) across `app/`, generalizing the pattern already in `assistant.py`
-- [ ] Log at boundaries: each OpenAI/Anthropic call (`embeddings.py`, `llm.py`, `agent.py`, `assistant.py`), note create/update/delete in `crud/notes.py`, and error paths in the routers
-- [ ] Central config: log level from a `LOG_LEVEL` env var (added to `.env.example` and `render.yaml`); a format that includes timestamp + logger name + level
-- [ ] (Stretch) request correlation — thread a request ID through the `/chat` agent loop so its multiple API calls are traceable as one unit; ties into the existing response `trace`
-- [ ] `README.md` / `CLAUDE.md` — document the level convention and `LOG_LEVEL`
+Built:
+- [x] `app/main.py` — central config: level driven by `LOG_LEVEL` (default INFO, safe fallback to INFO on an unrecognized value rather than crashing startup); format `"%(asctime)s %(levelname)s %(name)s: %(message)s"` so every line carries a timestamp + emitting module + level. Existing `httpx`→WARNING quieting kept
+- [x] Per-module loggers (`getLogger(__name__)`) added to `embeddings.py`, `llm.py`, `agent.py`, `crud/notes.py`, generalizing the pattern already in `assistant.py`
+- [x] External-call seams: DEBUG before the `embed_text` call (size only — fires per-write *and* per-search, too frequent for INFO) with an explicit `logger.error` on failure that carries the input size; INFO breadcrumbs before the discrete `/ask` (`generate_answer`) and `/draft` (`draft_note`) calls; INFO per `/chat` agent-loop iteration (which tools the model chose) plus a WARNING on the iteration cap
+- [x] `crud/notes.py` — INFO on note create/update/delete (id and changed field names only); INFO with count on a semantic search that returns results, WARNING when it returns zero (placed in `search_notes_semantic` so `/query`, `/ask`, and `/chat` all share it)
+- [x] `LOG_LEVEL` added to `.env.example` (with a comment listing valid values) and `render.yaml` (as a committed `value: INFO`, not a `sync: false` secret)
+- [x] `README.md` / `CLAUDE.md` — `LOG_LEVEL` and the level convention documented
 
-**Considerations to get right (the whole point — placement and level, not sprinkling):**
-- **Level discipline** — a clear rule per level: INFO for state changes ("note created", "search returned N"), WARNING for recoverable oddities (0 results, a retry), ERROR/`exception` for failures. Avoid the everything-at-INFO and `print()` anti-patterns
-- **Where to log** — at seams (request in/out, external calls, DB writes) and error paths, *not* inside pure logic where it becomes noise
-- **What must never be logged** — API keys, full embedding vectors, raw note content / anything potentially sensitive
-- **Cost of verbosity** — `httpx` is already quieted to WARNING; keep new logs from re-drowning the signal
-- **Observability vs. the response `trace`** — the `/chat` trace is user-facing; logs are for the developer. Keep the two purposes distinct
+Verified: full suite stays green (34 passed). Log output was confirmed two ways without paid API calls — an isolated check that `LOG_LEVEL` toggles the DEBUG line on/off and the format renders correctly, and a targeted `pytest --log-cli-level=INFO` run showing the real `crud/notes.py` lines firing (`Created note <id> (type=...)`, `Updated note <id> (fields=['title'], re-embedded=False)`, `Semantic search returned N note(s)` / `... no notes`).
 
-**Scope boundary:** logging only. Metrics, distributed tracing, and error-aggregation services (Sentry, OpenTelemetry) are a deliberately separate, later concern — folding them in here would defeat "start simple."
+**Design decisions:**
+- **`LOG_LEVEL` parsed with a safe fallback** — `getattr(logging, LOG_LEVEL.upper(), logging.INFO)` so a typo in the env var falls back to INFO instead of crashing the app on startup (a startup crash on Render is worse than a wrong level)
+- **`LOG_LEVEL` is config-as-code (`value: INFO`), not a dashboard secret** — it isn't sensitive, so the default belongs in version control where it's visible and tracked; changing verbosity is a deliberate, reviewable edit-and-redeploy, unlike the `sync: false` API keys. Trade-off accepted: no dashboard-only flip without a deploy
+- **Level rule, applied consistently:** DEBUG = high-frequency internal plumbing (`embed_text`) and request-shape detail; INFO = discrete user-facing operations and state changes (note create/update/delete, `/ask`, `/draft`, per-loop iteration, search-returned-N); WARNING = recoverable oddities (0 search results, iteration cap); ERROR/`exception` = failures
+- **`logger.error` (re-raise) vs `logger.exception` (swallow)** — the deciding factor is whether the exception keeps propagating. If it's re-raised, log a one-line context message with `logger.error` and *no* `exc_info`, letting whoever finally handles it log the traceback (the ASGI handler, or the `/chat` loop) — this avoids duplicate tracebacks. If it's swallowed here (the agent loop's tool-dispatch `except`), use `logger.exception` because that's the only place the traceback gets captured
+- **`embed_text`'s ERROR wrap earns its place by adding context, not visibility** — the failure is logged with a traceback either way (uvicorn, or the `/chat` loop). The wrap exists to carry the *input size*, which the traceback lacks and which distinguishes a token-limit failure from a transient one. Its pre-call breadcrumb is DEBUG (invisible in prod), so this is also the only embedding-specific signal at the prod level
+- **Never log values** — only note ids, changed field *names*, sizes, and counts. No API keys, embedding vectors, raw note content, or question text
+- **Routers deliberately left unlogged** — their only error paths are the `404` `HTTPException`s, which are expected client outcomes already recorded in uvicorn's access log; 500-class failures already get a traceback from uvicorn (or the `/chat` loop). Adding request logging would duplicate uvicorn and be exactly the cargo-cult the phase warns against
 
-**Risks / gotchas:**
-- Cargo-cult logging — a `logger.info` on every function produces noise that's worse than silence; the value is entirely in placement and level
-- Wrong-level inflation — logging recoverable conditions as ERROR trains you to ignore ERROR
-- Leaking secrets/PII into logs is a real production failure mode, not a hypothetical
+**Scope boundary:** logging only. Metrics, distributed tracing, and error-aggregation services (Sentry, OpenTelemetry) are a deliberately separate, later concern. The planned (stretch) request-correlation ID through the `/chat` loop was **not** built — deferred as over-engineering at personal scale; see Follow-ups.
+
+**Risks / gotchas (carried forward):**
+- Cargo-cult logging — a `logger.info` on every function is noise worse than silence; the value is entirely in placement and level. This drove the decision to leave the routers unlogged
+- Wrong-level inflation — logging recoverable conditions as ERROR trains you to ignore ERROR (why 0-results is WARNING, not ERROR)
+- Leaking secrets/PII into logs is a real production failure mode — mitigated by the never-log-values rule, but worth re-checking whenever a new log line is added
 
 ---
 
@@ -625,6 +628,12 @@ Decisions made during development that future work should respect.
 | Phase 12 | Ranking test uses controlled vectors, not the real API | Tests LearnStack's ordering/scoring code (deterministic, yours) rather than OpenAI's semantic quality (not yours). Runs in CI on every PR with no key — avoids a `skipif`-gated live test that silently never runs (pytest doesn't load `.env`). Live smoke checks, if ever wanted, belong in a separate scheduled workflow, not the gate |
 | Phase 12 | Prebuilt `pgvector/pgvector:pg15` service container; `create_all` (not Alembic) in CI | Avoids compiling pgvector from source like the local `Dockerfile`. `conftest.py` builds the schema from ORM models, so CI only needs the `vector` extension present — no migration step for the test run |
 | Phase 12 | Branch protection via ruleset: require the `test` check; require PR with **0 approvals**; keep admin bypass | On a solo repo, ≥1 required approval permanently blocks merges (you can't approve your own PR); 0 approvals still forces changes through the gated PR. Admin bypass left on so a misconfigured rule can't lock you out of your own repo |
+| Phase 13 | `LOG_LEVEL` parsed with `getattr(logging, LOG_LEVEL.upper(), logging.INFO)` | A typo in the env var falls back to INFO instead of crashing on startup; a startup crash on Render is worse than a wrong level |
+| Phase 13 | `LOG_LEVEL` committed as `value: INFO` in `render.yaml`, not `sync: false` | It isn't a secret, so the default belongs in version control where it's visible and tracked; changing verbosity is a deliberate edit-and-redeploy. Trade-off: no dashboard-only flip without a deploy |
+| Phase 13 | `logger.error` + re-raise vs `logger.exception` when swallowing | The deciding factor is whether the exception keeps propagating. Re-raise → `logger.error` with no `exc_info` (whoever finally handles it logs the traceback — avoids duplicate tracebacks); swallow here → `logger.exception` (the only place the traceback gets captured) |
+| Phase 13 | `embed_text`'s ERROR wrap adds context (input size), not visibility | The failure is logged with a traceback either way (uvicorn or the `/chat` loop). The wrap carries `len(text)`, which the traceback lacks and which distinguishes a token-limit failure from a transient one; its DEBUG breadcrumb is invisible in prod, so it's also the only embedding-specific signal at the prod level |
+| Phase 13 | Never log values — only ids, field names, sizes, counts | API keys, embedding vectors, raw note content, and question text are never logged; leaking secrets/PII to logs is a real production failure mode |
+| Phase 13 | Routers deliberately left unlogged | Their only error paths are `404`s — expected client outcomes already in uvicorn's access log; 500s already get a traceback upstream. Request logging would duplicate uvicorn and be cargo-cult |
 
 ---
 
@@ -653,6 +662,7 @@ Items to revisit at no fixed deadline. Not deferred features — these are code 
 | `app/routers/ask.py`, `app/routers/assistant.py` | `/ask` vs `/chat` overlap | `/ask` is always-search-then-answer; `/chat`'s agent loop can do the same plus more. Decide whether `/ask` stays as a simpler single-shot option or eventually folds into `/chat`. |
 | `app/assistant.py` | `/chat` conversation history is text-only | The loop replays prior user/assistant text but not `tool_use`/`tool_result` blocks, so cross-turn tool context isn't preserved. Fine at current scale; revisit if multi-turn tool continuity matters. |
 | `app/database.py` | Engine + `DATABASE_URL` check run at import time | Importing the module requires a live `DATABASE_URL` and builds the engine eagerly — which is why CI had to set `DATABASE_URL` even though tests override the session. The lazy-init pattern used by `_client()` in `agent.py`/`llm.py`/`embeddings.py` would defer this so import doesn't depend on env. Low priority; the CI env var is a fine workaround. |
+| `app/assistant.py`, `app/routers/assistant.py` | Request-correlation ID through the `/chat` loop (Phase 13 stretch, not built) | One `/chat` request fans out into several model calls logged as separate lines with no shared identifier, so concurrent requests interleave in the logs. Threading a request ID (e.g. via `logging` `extra=`/a filter) would let one turn's lines be grepped together. Deferred as over-engineering at single-user scale; revisit if concurrency or log volume makes interleaving a real problem. |
 
 ---
 
