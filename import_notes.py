@@ -17,7 +17,10 @@ from pathlib import Path
 
 INBOX = Path("notes-inbox")
 PROCESSED = INBOX / "processed"
-API_URL = "http://localhost:8000/notes"
+# 127.0.0.1, not "localhost": on Windows localhost resolves to IPv6 (::1) first, but the
+# uvicorn dev server binds IPv4 only, so each request wastes ~2s on a failed ::1 attempt
+# before falling back. Using the IPv4 address directly skips that.
+API_URL = "http://127.0.0.1:8000/notes"
 
 VALID_TYPES = {
     "technical_note", "command", "error_fix",
