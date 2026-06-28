@@ -16,9 +16,6 @@ services:
       # by editing this value and redeploying (unlike the dashboard-set sync:false vars above).
       - key: LOG_LEVEL
         value: INFO
-
-databases:
-  - name: learnstack-db
-    databaseName: learnstack
-    user: learnstack
-    plan: free
+# Database is hosted on Neon (free tier), not Render. DATABASE_URL above is the
+# Neon connection string, set as a dashboard secret. No databases: block here —
+# Render provisions only the web service; it does not manage the database.
