@@ -12,7 +12,7 @@ if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL environment variable is not set")
 
 
-def _split_ssl_args(url: str) -> tuple[str, dict]:
+def split_ssl_args(url: str) -> tuple[str, dict]:
     """Move libpq-only TLS params out of the URL and into asyncpg connect_args.
 
     Neon's connection string carries ``?sslmode=require`` (and often
@@ -23,6 +23,9 @@ def _split_ssl_args(url: str) -> tuple[str, dict]:
 
     For the local Docker URL (no ``sslmode``) this is a no-op: the query stays
     empty and ``connect_args`` comes back empty, so behavior is unchanged.
+
+    Shared with ``alembic/env.py`` so the migration engine and the app engine
+    handle Neon's URL identically — both connection paths must stay in sync.
     """
     split = urlsplit(url)
     query = dict(parse_qsl(split.query))
@@ -38,7 +41,7 @@ def _split_ssl_args(url: str) -> tuple[str, dict]:
     return cleaned, connect_args
 
 
-DATABASE_URL, _connect_args = _split_ssl_args(DATABASE_URL)
+DATABASE_URL, _connect_args = split_ssl_args(DATABASE_URL)
 
 engine = create_async_engine(DATABASE_URL, connect_args=_connect_args)
 AsyncSessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
