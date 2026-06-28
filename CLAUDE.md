@@ -48,9 +48,11 @@ Phase 13 (Logging) added deliberate, leveled logging across the app's boundaries
 
 Phase 13 completes the two production-fundamentals phases (CI, then logging) taken ahead of the remaining feature work. The app auto-deploys to Render on merge to `main`, so a merge gate and runtime observability mattered more right now than added features.
 
-**Phase 14 — Planned next (Insights).** A scheduled clustering pipeline over note embeddings. See the Phase 14 section below.
+**Phase 14 — In progress (Neon database migration).** Move the production Postgres database off Render's free tier (which suspends after 30 days) onto Neon's free tier, keeping the web service on Render. A focused infrastructure change — the asyncpg/SSL connection details and the `render.yaml` trim are the work; no application logic moves. Inserted ahead of Insights because it is time-sensitive (gated by Render's suspension date) and is a different concern (deployment, not features), so it stays its own coherent change rather than being bundled into a feature phase. **Code + config are complete and verified against a live Neon instance; the Render redeploy and the one-time data copy are the remaining steps.** See the Phase 14 section below.
 
-**Phase 15 — Planned (Authentication).** HTTP Basic Auth on the Render deployment so the app can be shared without being fully public. See the deferred list below; a full phase plan will be written when it comes up (Auth does not yet have a standalone phase section).
+**Phase 15 — Planned (Insights).** A scheduled clustering pipeline over note embeddings. See the Phase 15 section below.
+
+**Phase 16 — Planned (Authentication).** HTTP Basic Auth on the Render deployment so the app can be shared without being fully public. See the deferred list below; a full phase plan will be written when it comes up (Auth does not yet have a standalone phase section).
 
 ---
 
@@ -67,8 +69,9 @@ Phase 13 completes the two production-fundamentals phases (CI, then logging) tak
 | 11 | Notes Assistant | `POST /chat` runs a multi-tool agent that decides whether to search notes, draft one, or just reply |
 | 12 | Continuous integration | GitHub Actions runs the test suite on every PR; a branch-protection rule gates merges to `main` |
 | 13 | Logging | Leveled logging across the app's boundaries and error paths; `LOG_LEVEL`-configurable and observable on Render |
-| 14 | Insights | A scheduled job clusters note embeddings into topics and labels them; `/insights` shows the results |
-| 15 | Authentication | HTTP Basic Auth gates all routes; credentials set via env vars, changeable without code changes |
+| 14 | Neon database migration | Production Postgres moved from Render's expiring free tier to Neon; web service stays on Render |
+| 15 | Insights | A scheduled job clusters note embeddings into topics and labels them; `/insights` shows the results |
+| 16 | Authentication | HTTP Basic Auth gates all routes; credentials set via env vars, changeable without code changes |
 
 **Embedding model:** OpenAI text-embedding API (industry standard, fractions of a cent per note for personal use).
 
@@ -82,7 +85,7 @@ Phase 13 completes the two production-fundamentals phases (CI, then logging) tak
 
 **Goal:** A `POST /chat` endpoint backed by a multi-tool agent loop. Unlike `/draft` (which forces a single tool via `tool_choice`), this agent has multiple tools available and decides — turn by turn — whether to search notes, draft a note, or just respond in text. ✓
 
-**Why:** `/query`, `/ask`, and `/draft` each wrap one capability behind one endpoint with no decision-making. This phase introduces the agent-loop pattern (`tool_choice: "auto"`, multi-turn tool execution, conversation state) as its own learning milestone, distinct from Phase 14's batch/scheduling pattern.
+**Why:** `/query`, `/ask`, and `/draft` each wrap one capability behind one endpoint with no decision-making. This phase introduces the agent-loop pattern (`tool_choice: "auto"`, multi-turn tool execution, conversation state) as its own learning milestone, distinct from Phase 15's batch/scheduling pattern.
 
 Built:
 - [x] `app/assistant.py` — `_TOOLS` (`search_notes`, `create_note`) and `run_assistant(messages, db)`: call the model with `tool_choice` defaulted to `"auto"` → if `tool_use`, dispatch to the matching `app/crud/notes.py` function and append a `tool_result` → repeat until the model responds in text or the `MAX_ITERATIONS = 5` cap is hit. `create_note` is confirm-before-save — it records the proposed draft in the trace and does **not** persist
@@ -176,7 +179,47 @@ Verified: full suite stays green (34 passed). Log output was confirmed two ways 
 
 ---
 
-## Phase 14 — Planned (Insights)
+## Phase 14 — In progress (Neon database migration)
+
+**Goal:** Move the production Postgres database off Render's free tier onto Neon's free tier, with no loss of notes and no change to local dev, tests, or CI. The web service stays on Render; only the database moves. Done when the deployed app on Render reads and writes against Neon, the existing notes have been migrated across, and `render.yaml` no longer provisions a Render database.
+
+**Why:** Render's free Postgres instance is suspended after 30 days, so the database needs a new home regardless. Neon's free tier is genuinely free (not time-boxed), speaks standard Postgres, and — critically — supports `pgvector`, which the entire RAG stack depends on. Keeping the web service on Render and moving only the database to Neon is the smallest change that solves the expiry. (Supabase is the comparable free + pgvector alternative; Neon is a fine choice and not worth overthinking.)
+
+**This is its own phase, not part of Insights.** It is time-sensitive (gated by Render's suspension date, whereas Insights is unhurried feature work) and a different concern (deployment/infrastructure, not clustering). Bundling an SSL/connection change with a KMeans feature into one PR would be hard to review and hard to roll back — so it stays a single coherent change, consistent with the one-phase-one-concern convention. Whether it carries a phase number is cosmetic; numbering it Phase 14 (and pushing Insights to 15) keeps the two unbundled, which is the point.
+
+**Blast radius is small — production connection only.** Local dev, the test suite, and CI all use the Docker / CI `pgvector` container, not the cloud database, so they are untouched. No application logic moves; this is a connection-string and config change plus a one-time data copy.
+
+Built:
+- [x] `app/database.py` — `_split_ssl_args()` moves Neon's libpq-only TLS params out of the URL and into asyncpg's `connect_args`. It strips **both** `sslmode` *and* `channel_binding` (Neon's copy-paste string carries both; asyncpg rejects both), and passes `connect_args={"ssl": True}` when SSL was requested. For the local Docker URL (no `sslmode`) it is a no-op: query stays empty, `connect_args` comes back `{}`, behavior unchanged — so local dev, tests, and CI are untouched
+- [x] `render.yaml` — `databases:` block removed (Render no longer provisions the database). `DATABASE_URL` stays a `sync: false` dashboard secret; the Neon connection string (scheme `postgresql+asyncpg://`, params stripped at runtime by the code above) is pasted into the Render Environment tab
+- [x] Neon project created (`learnstack`, Postgres 18.4, AWS us-west-2 / Oregon — co-located with the Render web service to minimize cross-DC latency). Verified live through `app/database.py`: SSL handshake succeeds, the URL reaches asyncpg with the params stripped and `ssl=True`, and `pgvector` 0.8.1 is reported available (not yet installed — the startup migration installs it). The **direct** (non-pooler) endpoint is used
+- [x] `README.md` / `CLAUDE.md` — deployment docs point the database at Neon; decision and gotchas recorded in the decisions log
+- [ ] Render redeploy against Neon — gated on this branch merging to `main` (auto-deploy). The deployed app currently still runs the pre-fix code, so it must **not** be pointed at Neon until this merges, or it crash-loops on the `sslmode` param. The `DATABASE_URL` secret is already saved in Render ("Save only", no deploy)
+- [ ] Data migration — `pg_dump` from the source database → restore into Neon **before Render suspends the old instance**, or the notes are lost. Same `pg_dump`/`pg_restore` mechanics as the Phase 10 section, just a different target (Neon's connection string). `--data-only -t notes` since the schema is created by the startup migration
+- [ ] `notes-inbox/` — capture the two connection gotchas (asyncpg can't parse `sslmode`/`channel_binding`; pooler vs direct endpoint) as notes once the deploy is confirmed. They are textbook fade-prone, project-specific facts — exactly the kind the RAG store is for
+
+Verified (locally, against live Neon, before any deploy): connecting through `app.database` with the converted URL succeeds; engine receives `...neon.tech/neondb` (no `sslmode`/`channel_binding`) with `connect_args={'ssl': True}`; server reports PostgreSQL 18.4; `pg_available_extensions` lists `vector` 0.8.1. Installed driver versions confirmed: SQLAlchemy 2.0.50, asyncpg 0.31.0 — `connect_args={"ssl": True}` is the correct form for these.
+
+**Design decisions:**
+- **Move only the database, keep the web service on Render** — the web service free tier is not expiring; the database is. The smallest change that fixes the actual problem
+- **Neon over staying on Render / over Supabase** — Render's free Postgres is the thing expiring, so staying isn't an option. Neon is picked over Supabase only on simplicity-of-fit; both are free with pgvector. Not worth deeper evaluation at personal scale
+- **Declined Neon's add-ons (Neon Auth / "Backend Services", `neonctl init` AI tooling)** — Neon Auth is a multi-user identity system (users/sessions tables, OAuth); the project's Phase 16 is deliberately single-user HTTP Basic Auth, and multi-user is explicitly not planned. Adopting it would also couple the app to a Neon-specific product, cutting against this phase's whole point (staying DB-agnostic so the next move is cheap). Created a plain Postgres project, nothing else
+- **Direct endpoint over the pooler** — avoids the asyncpg-prepared-statements-vs-PgBouncer problem entirely for a single low-traffic service, rather than carrying a `statement_cache_size=0` workaround for pooling the app doesn't need
+- **SSL via `connect_args`, both `sslmode` and `channel_binding` stripped from the URL** — asyncpg's TLS is configured through the driver (`connect_args={"ssl": True}`), not libpq URL params. Neon's copy-paste string carries *both* `sslmode=require` and `channel_binding=require`, and asyncpg rejects both; stripping only `sslmode` would leave the second as a hidden second failure. The stripping is implemented generically (`_split_ssl_args`) so the local URL with no such params is unaffected
+- **`DATABASE_URL` stays a dashboard secret (`sync: false`)** — unchanged posture from Phase 10; the connection string (now Neon's) is still set in the Render dashboard, never committed
+- **No application logic moves** — `crud/`, `routers/`, logging, and the agent loops are all DB-agnostic; this phase deliberately touches only `database.py` and `render.yaml`
+
+**Risks / gotchas:**
+- **Time-sensitive** — the data copy must happen before Render suspends the instance, or the notes are gone. This is the one hard deadline in the phase
+- **Deploy order matters** — the SSL-stripping fix must be on `main` *before* the live app points at Neon. Pointing the deployed (pre-fix) app at the Neon URL would crash-loop on the `sslmode` param. Mitigated by saving the Render `DATABASE_URL` with "Save only" (no deploy) and letting the merge-triggered deploy pick it up with the fix in place
+- **asyncpg + `sslmode`/`channel_binding`** — the first-deploy failure mode; the URL must have both stripped and SSL passed via `connect_args` (handled by `_split_ssl_args`)
+- **Pooler vs direct endpoint** — using the `-pooler` host with asyncpg's default prepared-statement caching causes intermittent failures; use the direct host (or `statement_cache_size=0`)
+- **Cold-start latency** — Neon autosuspends on idle; the first request after a quiet period is slow. Acceptable for a personal app, but expect it in the logs
+- **`DATABASE_URL` scheme** — must be `postgresql+asyncpg://` (not Neon's default `postgres://`), same conversion already noted for Render
+
+---
+
+## Phase 15 — Planned (Insights)
 
 **Goal:** A scheduled job clusters note embeddings into topics, labels each cluster via the LLM, and stores the results so the UI can show what your notes are actually about — without asking a question.
 
@@ -449,7 +492,7 @@ learnstack/
 │   └── _template.md
 ├── import_notes.py          # Batch import script (posts inbox files to API)
 ├── setup.ps1                # One-command local dev setup (Windows PowerShell)
-├── render.yaml              # Render config-as-code: web service + managed Postgres
+├── render.yaml              # Render config-as-code: web service only (DB hosted on Neon)
 ├── docker-compose.yml       # PostgreSQL 15 service with pgvector (local dev only)
 ├── Dockerfile               # Custom pgvector image (pgvector compiled from source, local dev only)
 ├── Dockerfile.app           # Python/FastAPI image (used by Render for cloud deploy)
@@ -515,8 +558,8 @@ Keyword search via query param: `GET /notes?q=dbt`
 | Layer | Tool | Version |
 |---|---|---|
 | Backend | FastAPI | latest stable |
-| Database | PostgreSQL | 15 |
-| Vector search | pgvector | 0.8.0 (compiled from source in Docker image) |
+| Database | PostgreSQL | 15 local (Docker) / 18 prod (Neon) |
+| Vector search | pgvector | 0.8.0 local (compiled in Docker image) / 0.8.1 prod (Neon) |
 | ORM | SQLAlchemy | 2.x (use async where possible) |
 | Migrations | Alembic | — |
 | Schemas | Pydantic | v2 |
@@ -525,7 +568,7 @@ Keyword search via query param: `GET /notes?q=dbt`
 | Python | 3.11+ | — |
 | Embeddings | OpenAI text-embedding-3-small | via `openai>=1.0.0` |
 | LLM | Anthropic Claude (Haiku) | via `anthropic>=0.25.0` |
-| Cloud | Render | Web service + managed Postgres via `render.yaml` |
+| Cloud | Render + Neon | Render runs the web service (`render.yaml`); Neon hosts the Postgres database (`DATABASE_URL` secret) |
 
 ---
 
@@ -634,6 +677,11 @@ Decisions made during development that future work should respect.
 | Phase 13 | `embed_text`'s ERROR wrap adds context (input size), not visibility | The failure is logged with a traceback either way (uvicorn or the `/chat` loop). The wrap carries `len(text)`, which the traceback lacks and which distinguishes a token-limit failure from a transient one; its DEBUG breadcrumb is invisible in prod, so it's also the only embedding-specific signal at the prod level |
 | Phase 13 | Never log values — only ids, field names, sizes, counts | API keys, embedding vectors, raw note content, and question text are never logged; leaking secrets/PII to logs is a real production failure mode |
 | Phase 13 | Routers deliberately left unlogged | Their only error paths are `404`s — expected client outcomes already in uvicorn's access log; 500s already get a traceback upstream. Request logging would duplicate uvicorn and be cargo-cult |
+| Phase 14 | Move only the database to Neon; keep the web service on Render | The web service free tier isn't expiring — the database is. Smallest change that fixes the actual problem; no application logic moves |
+| Phase 14 | Strip both `sslmode` *and* `channel_binding`; pass SSL via `connect_args={"ssl": True}` | asyncpg configures TLS through the driver, not libpq URL params, and rejects both libpq params Neon's string carries. Done generically in `_split_ssl_args` so the local (no-param) URL is a no-op — local/tests/CI untouched |
+| Phase 14 | Use Neon's direct (non-pooler) endpoint | The `-pooler` (PgBouncer transaction-mode) host breaks asyncpg's prepared statements; the direct host avoids it with no `statement_cache_size=0` workaround for pooling a single low-traffic app doesn't need |
+| Phase 14 | Decline Neon Auth / `neonctl` AI tooling; create a plain Postgres project | Neon Auth is multi-user identity (not planned; Phase 16 is single-user Basic Auth) and would couple the app to a Neon product — against this phase's goal of staying DB-agnostic so the next move stays cheap |
+| Phase 14 | Save Neon `DATABASE_URL` in Render with "Save only"; let the merge-triggered deploy apply it | The deployed app still runs pre-fix code; pointing it at Neon before the SSL fix is on `main` would crash-loop on `sslmode`. Saving without deploying stages the secret so the auto-deploy picks it up with the fix in place |
 
 ---
 
@@ -641,7 +689,7 @@ Decisions made during development that future work should respect.
 
 Do not build these until the relevant phase is reached:
 
-- Authentication (Phase 15) — HTTP Basic Auth gating all routes; credentials via env vars
+- Authentication (Phase 16) — HTTP Basic Auth gating all routes; credentials via env vars
 - Job postings and application tracking — separate table with dedicated fields; not stored in notes; no target phase
 - URL fetching in the draft agent — paste-only for now; defer to a later phase
 - Multi-user support (not planned)
