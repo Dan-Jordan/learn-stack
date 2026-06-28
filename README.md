@@ -25,7 +25,7 @@ LearnStack is not a second brain. It is a backend application that earns its com
 - Postgres backend with pgvector extension, schema managed by Alembic migrations
 - Embeddings generated automatically on note create/update via OpenAI text-embedding API
 - Two note capture paths: the web UI's Draft & Save tab (browser), or a markdown inbox workflow (`notes-inbox/` → `import_notes.py`) for capturing notes from the terminal/Claude Code without context-switching
-- Deployable to Render via `render.yaml` — Docker web service + managed Postgres, one-command setup for cloud hosting
+- Deployable to the cloud — Docker web service on Render via `render.yaml`, with the Postgres database hosted on Neon
 
 ---
 
@@ -47,7 +47,7 @@ The project serves two purposes simultaneously:
 |---|---|
 | Python | 3.11+ |
 | Backend | FastAPI |
-| Database | PostgreSQL 15 |
+| Database | PostgreSQL 15 (local) / 18 on Neon (prod) |
 | ORM | SQLAlchemy 2.x (async) |
 | Schemas | Pydantic v2 |
 | Migrations | Alembic |
@@ -56,7 +56,7 @@ The project serves two purposes simultaneously:
 | Embeddings | OpenAI text-embedding API + pgvector |
 | LLM | Anthropic Claude (Haiku) |
 | Web UI | Plain HTML + fetch() (no framework) |
-| Cloud | Render (web service + managed Postgres) |
+| Cloud | Render (web service) + Neon (Postgres) |
 
 ---
 
@@ -170,17 +170,17 @@ Logs never include API keys, embedding vectors, or note content — only ids, ch
 
 ---
 
-## Cloud deployment (Render)
+## Cloud deployment (Render + Neon)
 
-LearnStack is deployable to [Render](https://render.com) as a Docker web service backed by a managed Postgres instance. `render.yaml` defines everything as code.
+LearnStack runs as a Docker web service on [Render](https://render.com), backed by a [Neon](https://neon.tech) Postgres database (free tier, with `pgvector`). The web service config lives in `render.yaml`; the database is hosted on Neon and connected via the `DATABASE_URL` secret. (Earlier the database was Render-managed; it was moved to Neon because Render's free Postgres suspends after 30 days — see the migration notes in `CLAUDE.md`, Phase 14.)
 
 ### First deploy
 
 1. Push the repo to GitHub.
-2. In the Render dashboard: **New → Blueprint** → connect your repo. Render reads `render.yaml` and creates the web service and database automatically.
-3. Leave `DATABASE_URL` blank at this step — the database doesn't exist yet. Fill in `OPENAI_API_KEY` and `ANTHROPIC_API_KEY` now.
-4. After the blueprint deploys and the database is provisioned, go to the **learnstack** web service → **Environment** tab and set `DATABASE_URL` — copy the **Internal Database URL** from the Render Postgres instance and change the scheme from `postgres://` to `postgresql+asyncpg://`.
-5. Save and deploy — Alembic migrations run automatically on startup.
+2. Create a Neon project (plain Postgres — no add-ons needed). Copy the **direct** (non-pooler) connection string from Neon's Connect panel; it looks like `postgresql://USER:PASSWORD@ep-xxx.REGION.aws.neon.tech/DBNAME?sslmode=require&channel_binding=require`. Pick a Neon region close to your Render region to minimize latency.
+3. In the Render dashboard: **New → Blueprint** → connect your repo. Render reads `render.yaml` and creates the web service (no database — Render does not provision one).
+4. On the **learnstack** web service → **Environment** tab, set the three secrets: `DATABASE_URL` = the Neon string with the scheme changed from `postgresql://` to `postgresql+asyncpg://` (leave the `?sslmode=...&channel_binding=...` params in place — the app strips them at runtime; see `app/database.py`), plus `OPENAI_API_KEY` and `ANTHROPIC_API_KEY`.
+5. Deploy — Alembic migrations run automatically on startup, creating the schema and the `pgvector` extension on Neon.
 6. The app is live at your Render-assigned URL.
 
 ### Subsequent deploys
@@ -189,11 +189,14 @@ Push to the connected branch — Render rebuilds and redeploys automatically. Mi
 
 ### Why migrations run on startup
 
-Shell access is not available on the free tier, so manual migration is not an option. `Dockerfile.app` runs `alembic upgrade head` before starting uvicorn. This is safe because Alembic migrations are idempotent.
+`Dockerfile.app` runs `alembic upgrade head` before starting uvicorn, ensuring
+the schema is always in sync with the codebase on deploy. This is safe because
+Alembic migrations are idempotent. (Note: Neon provides a SQL console for manual
+intervention if needed, but startup migration remains the primary mechanism.)
 
-### Loading local notes into Render
+### Loading notes into the cloud database (Neon)
 
-`pg_dump` and `pg_restore` are not installed locally — Postgres runs inside Docker, so these commands run via `docker exec`.
+`pg_dump` and `pg_restore` are not installed locally — Postgres runs inside Docker, so these commands run via `docker exec`. The destination is Neon's connection string (use the plain `postgresql://...` form here, **not** the `+asyncpg` SQLAlchemy variant — `pg_dump`/`pg_restore` are libpq tools and understand `sslmode`/`channel_binding` natively).
 
 ```powershell
 # Dump local database
@@ -201,13 +204,13 @@ docker exec -t learn-stack-db-1 pg_dump -U postgres -d learnstack -F c -f /tmp/l
 docker cp learn-stack-db-1:/tmp/learnstack_backup.dump ./learnstack_backup.dump
 docker exec learn-stack-db-1 rm /tmp/learnstack_backup.dump
 
-# Restore to Render (data only — schema already exists from migrations)
+# Restore to Neon (data only — schema already exists from the startup migration)
 docker cp learnstack_backup.dump learn-stack-db-1:/tmp/learnstack_backup.dump
-docker exec -t learn-stack-db-1 pg_restore -d "your-render-external-url" --no-owner --data-only -t notes -F c /tmp/learnstack_backup.dump
+docker exec -t learn-stack-db-1 pg_restore -d "postgresql://USER:PASSWORD@ep-xxx.REGION.aws.neon.tech/DBNAME?sslmode=require" --no-owner --data-only -t notes -F c /tmp/learnstack_backup.dump
 docker exec learn-stack-db-1 rm /tmp/learnstack_backup.dump
 ```
 
-Use the **External Database URL** from the Render dashboard (the internal URL only works from inside Render's network). Use `--data-only -t notes` to skip schema creation and only restore note rows.
+Use `--data-only -t notes` to skip schema creation and only restore note rows. The startup migration must have run at least once first (so the `notes` table and `pgvector` extension exist on Neon). Duplicate-key errors on rows that already exist are safe to ignore.
 
 ---
 
@@ -215,7 +218,7 @@ Use the **External Database URL** from the Render dashboard (the internal URL on
 
 This project was inspired by Andrej Karpathy's [LLM Wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) concept — the idea of a persistent, AI-maintained personal knowledge base where knowledge compounds over time rather than scattering across chat history. The YouTube video [*Build An AI Second Brain Knowledge Base (Step-By-Step)*](https://www.youtube.com/watch?v=yke4fLQUsh4) helped bring that concept into focus.
 
-The architecture here takes a different approach: rather than an LLM-maintained wiki, LearnStack is a RAG system — you write the notes, they get embedded, and the system retrieves and answers from what you actually captured. The implementation is my own, built incrementally over eleven phases as a learning exercise in FastAPI, Postgres, pgvector, LLM API integration, agent loops, and cloud deployment.
+The architecture here takes a different approach: rather than an LLM-maintained wiki, LearnStack is a RAG system — you write the notes, they get embedded, and the system retrieves and answers from what you actually captured. The implementation is my own, built incrementally over thirteen phases as a learning exercise in FastAPI, Postgres, pgvector, LLM API integration, agent loops, and cloud deployment.
 
 ---
 
