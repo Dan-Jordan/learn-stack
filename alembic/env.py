@@ -7,7 +7,7 @@ from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from alembic import context
-from app.database import Base
+from app.database import Base, split_ssl_args
 import app.models.note  # noqa: F401 — registers Note with Base.metadata
 
 load_dotenv()
@@ -47,7 +47,10 @@ def do_run_migrations(connection) -> None:
 
 
 async def run_async_migrations() -> None:
-    engine = create_async_engine(get_url(), poolclass=pool.NullPool)
+    # Strip Neon's libpq-only TLS params and pass SSL via connect_args, the same
+    # way app/database.py does — asyncpg can't parse sslmode/channel_binding.
+    url, connect_args = split_ssl_args(get_url())
+    engine = create_async_engine(url, connect_args=connect_args, poolclass=pool.NullPool)
     async with engine.begin() as conn:
         await conn.run_sync(do_run_migrations)
     await engine.dispose()
