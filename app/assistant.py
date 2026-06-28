@@ -95,7 +95,7 @@ async def run_assistant(messages: list[dict], db: AsyncSession) -> tuple[str, li
     trace: list[dict] = []
     response = None
 
-    for _ in range(MAX_ITERATIONS):
+    for i in range(MAX_ITERATIONS):
         response = await _client().messages.create(
             model=MODEL,
             max_tokens=1024,
@@ -105,8 +105,14 @@ async def run_assistant(messages: list[dict], db: AsyncSession) -> tuple[str, li
         )
 
         if response.stop_reason != "tool_use":
+            logger.info("Assistant replied in text on iteration %d/%d", i + 1, MAX_ITERATIONS)
             text = next((b.text for b in response.content if b.type == "text"), "")
             return text, trace
+
+        # INFO so a multi-call turn is legible in the logs: which tools the model chose, when.
+        tool_names = [b.name for b in response.content if b.type == "tool_use"]
+        logger.info("Iteration %d/%d: model requested tool(s): %s",
+                    i + 1, MAX_ITERATIONS, ", ".join(tool_names))
 
         # Preserve the assistant turn (including tool_use blocks) before answering it.
         messages.append({"role": "assistant", "content": response.content})
@@ -165,7 +171,8 @@ async def run_assistant(messages: list[dict], db: AsyncSession) -> tuple[str, li
 
         messages.append({"role": "user", "content": tool_results})
 
-    # Iteration cap hit — return whatever text the last response carried, flagged.
+    # Iteration cap hit — a recoverable oddity worth a WARNING (the loop ran long but didn't run away).
+    logger.warning("Assistant hit the %d-iteration cap without a final text reply", MAX_ITERATIONS)
     text = next((b.text for b in response.content if b.type == "text"), "")
     note = "(Stopped after reaching the tool-iteration limit.)"
     return (f"{text}\n\n{note}" if text else note), trace

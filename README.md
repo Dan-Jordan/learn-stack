@@ -98,6 +98,9 @@ LearnStack runs on [Render](https://render.com) with a managed Postgres database
 ### Phase 12 — Continuous integration ✓
 A GitHub Actions workflow (`.github/workflows/ci.yml`) runs the full test suite against a `pgvector/pgvector:pg15` service container on every pull request and push to `main`. The suite mocks the embedding seam and the LLM clients, so CI needs **no API keys and makes no live calls**. A branch-protection rule on `main` requires the CI check to pass before merge — the gate in front of Render's auto-deploy.
 
+### Phase 13 — Logging ✓
+Deliberate, leveled logging across the app's boundaries — the OpenAI/Anthropic call seams and note create/update/delete plus semantic search — driven by a `LOG_LEVEL` env var so the deployed app is observable on Render. Log lines carry a timestamp, the emitting module, and a level; never API keys, embedding vectors, or note content. See [Logging](#logging) below.
+
 ---
 
 ## Getting started
@@ -149,6 +152,21 @@ Tests run without any API keys and make no live calls: an autouse fixture in `te
 ### Continuous integration
 
 Every pull request and push to `main` triggers `.github/workflows/ci.yml`, which runs `pytest` on Linux against a `pgvector/pgvector:pg15` service container — matching the deploy target and catching environment-specific breakage before Render does. Because the suite mocks all external API calls, CI requires no secrets. A branch-protection rule on `main` requires this check to pass before merge.
+
+### Logging
+
+Logging verbosity is controlled by the `LOG_LEVEL` env var (`DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`; defaults to `INFO`, and an unrecognized value falls back to `INFO` rather than crashing startup). Each line carries a timestamp, the emitting module, and the level — e.g. `2026-06-21 12:00:00 INFO app.crud.notes: Created note <id> (type=...)`.
+
+The level convention:
+
+| Level | Used for | Examples |
+|---|---|---|
+| `DEBUG` | High-frequency internal detail, off in production | per-call embedding requests (size only) |
+| `INFO` | Discrete operations and state changes | note created/updated/deleted, `/ask` and `/draft` calls, each `/chat` agent-loop iteration, search returned N |
+| `WARNING` | Recoverable oddities | a semantic search returning zero notes, the `/chat` iteration cap |
+| `ERROR` / `exception` | Failures | an embedding or model call that raised |
+
+Logs never include API keys, embedding vectors, or note content — only ids, changed field names, sizes, and counts. On Render, set `LOG_LEVEL` in `render.yaml` (committed as a non-secret default) and redeploy to change verbosity.
 
 ---
 

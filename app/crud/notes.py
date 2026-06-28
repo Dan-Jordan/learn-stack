@@ -1,3 +1,4 @@
+import logging
 import uuid
 from datetime import datetime, timezone
 from sqlalchemy import select, or_
@@ -6,6 +7,8 @@ from app.models.note import Note
 from app.schemas.note import NoteCreate, NoteUpdate
 from app.embeddings import embed_text
 
+logger = logging.getLogger(__name__)
+
 
 async def create_note(db: AsyncSession, note_in: NoteCreate) -> Note:
     note = Note(**note_in.model_dump())
@@ -13,6 +16,8 @@ async def create_note(db: AsyncSession, note_in: NoteCreate) -> Note:
     db.add(note)
     await db.commit()
     await db.refresh(note)
+    # INFO state change; the id lets a later retrieval/citation be correlated back to this write.
+    logger.info("Created note %s (type=%s)", note.id, note.note_type)
     return note
 
 
@@ -54,6 +59,11 @@ async def update_note(
     note.updated_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(note)
+    # Field names only (never the new values), plus whether the content change forced a re-embed.
+    logger.info(
+        "Updated note %s (fields=%s, re-embedded=%s)",
+        note_id, sorted(updates), "content" in updates,
+    )
     return note
 
 
@@ -63,6 +73,7 @@ async def delete_note(db: AsyncSession, note_id: uuid.UUID) -> bool:
         return False
     await db.delete(note)
     await db.commit()
+    logger.info("Deleted note %s", note_id)
     return True
 
 
@@ -81,4 +92,11 @@ async def search_notes_semantic(
     )
     rows = (await db.execute(stmt)).all()
     # cosine_distance returns 0 (identical) to 2 (opposite); subtract from 1 to get similarity score.
-    return [(note, 1 - distance) for note, distance in rows]
+    results = [(note, 1 - distance) for note, distance in rows]
+    # One log per search (shared by /query, /ask, and /chat). Zero results is a recoverable
+    # oddity worth flagging — the downstream answer will be ungrounded — so WARNING, not INFO.
+    if results:
+        logger.info("Semantic search returned %d note(s)", len(results))
+    else:
+        logger.warning("Semantic search returned no notes")
+    return results
