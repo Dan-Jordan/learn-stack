@@ -43,7 +43,12 @@ def split_ssl_args(url: str) -> tuple[str, dict]:
 
 DATABASE_URL, _connect_args = split_ssl_args(DATABASE_URL)
 
-engine = create_async_engine(DATABASE_URL, connect_args=_connect_args)
+# pool_pre_ping: Neon autosuspends on idle and drops its side of pooled
+# connections. Without a liveness check the first request after idle grabs a
+# dead connection from the pool and errors; pre_ping transparently discards it
+# and opens a fresh one. (Only the app engine pools — alembic/env.py uses
+# NullPool, so it has no stale connections to guard against.)
+engine = create_async_engine(DATABASE_URL, connect_args=_connect_args, pool_pre_ping=True)
 AsyncSessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 

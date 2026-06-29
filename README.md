@@ -90,7 +90,7 @@ A single-page web UI served by FastAPI at `http://localhost:8000/`. Four tabs: *
 `.\setup.ps1` from a clean clone brings the full local stack up in one command: Docker → venv → pip install → `.env` → migrations → test DB → dev server.
 
 ### Phase 10 — Cloud deployment ✓
-LearnStack runs on [Render](https://render.com) with a managed Postgres database. `render.yaml` defines the web service and database as code. `GET /health` supports Render's health check.
+LearnStack runs on [Render](https://render.com). `render.yaml` defines the web service as code; `GET /health` supports Render's health check. (At the time, Render also provisioned a managed Postgres database — that database later moved to Neon in Phase 14.)
 
 ### Phase 11 — Notes Assistant ✓
 `POST /chat` runs a multi-tool agent loop (`tool_choice: "auto"`) over `search_notes` and `create_note`, deciding per turn whether to search your notes, draft a new one, or just reply. Drafts are confirm-before-save — returned for review, never auto-persisted. New **Assistant** chat tab in the web UI. 34 passing tests (7 new).
@@ -100,6 +100,9 @@ A GitHub Actions workflow (`.github/workflows/ci.yml`) runs the full test suite 
 
 ### Phase 13 — Logging ✓
 Deliberate, leveled logging across the app's boundaries — the OpenAI/Anthropic call seams and note create/update/delete plus semantic search — driven by a `LOG_LEVEL` env var so the deployed app is observable on Render. Log lines carry a timestamp, the emitting module, and a level; never API keys, embedding vectors, or note content. See [Logging](#logging) below.
+
+### Phase 14 — Neon database migration ✓
+Moved the production Postgres database from Render's expiring free tier to [Neon](https://neon.tech) (free tier, with `pgvector`); the web service stays on Render. `app/database.py` and `alembic/env.py` share `split_ssl_args()`, which strips Neon's libpq-only `sslmode`/`channel_binding` params and passes SSL via asyncpg's `connect_args` — a no-op for the local/CI URL. `render.yaml` no longer provisions a database. Existing notes copied across with `pg_dump`/`pg_restore`. See [Cloud deployment](#cloud-deployment-render--neon) below.
 
 ---
 
@@ -199,18 +202,24 @@ intervention if needed, but startup migration remains the primary mechanism.)
 `pg_dump` and `pg_restore` are not installed locally — Postgres runs inside Docker, so these commands run via `docker exec`. The destination is Neon's connection string (use the plain `postgresql://...` form here, **not** the `+asyncpg` SQLAlchemy variant — `pg_dump`/`pg_restore` are libpq tools and understand `sslmode`/`channel_binding` natively).
 
 ```powershell
-# Dump local database
-docker exec -t learn-stack-db-1 pg_dump -U postgres -d learnstack -F c -f /tmp/learnstack_backup.dump
-docker cp learn-stack-db-1:/tmp/learnstack_backup.dump ./learnstack_backup.dump
-docker exec learn-stack-db-1 rm /tmp/learnstack_backup.dump
+# Dump the notes table from local Docker Postgres (schema + data, custom format)
+docker exec -t learn-stack-db-1 pg_dump -U postgres -d learnstack -F c -t notes -f /tmp/notes.dump
+docker cp learn-stack-db-1:/tmp/notes.dump ./notes.dump
 
-# Restore to Neon (data only — schema already exists from the startup migration)
-docker cp learnstack_backup.dump learn-stack-db-1:/tmp/learnstack_backup.dump
-docker exec -t learn-stack-db-1 pg_restore -d "postgresql://USER:PASSWORD@ep-xxx.REGION.aws.neon.tech/DBNAME?sslmode=require" --no-owner --data-only -t notes -F c /tmp/learnstack_backup.dump
-docker exec learn-stack-db-1 rm /tmp/learnstack_backup.dump
+# Restore DATA ONLY into Neon (schema already created by the startup migration)
+docker cp notes.dump learn-stack-db-1:/tmp/notes.dump
+docker exec -t learn-stack-db-1 pg_restore --no-owner --data-only -t notes -F c -d "postgresql://USER:PASSWORD@ep-xxx.REGION.aws.neon.tech/DBNAME?sslmode=require" /tmp/notes.dump
+
+# Clean up the temp dump files
+docker exec learn-stack-db-1 rm /tmp/notes.dump
+rm ./notes.dump
 ```
 
-Use `--data-only -t notes` to skip schema creation and only restore note rows. The startup migration must have run at least once first (so the `notes` table and `pgvector` extension exist on Neon). Duplicate-key errors on rows that already exist are safe to ignore.
+`--data-only -t notes` copies only the note rows — the `notes` table and `pgvector` extension already exist on Neon from the startup migration (which must have run at least once first). Duplicate-key errors on rows that already exist are safe to ignore. Verify the copy with `pg_restore`'s libpq URL:
+
+```powershell
+docker exec -t learn-stack-db-1 psql "postgresql://USER:PASSWORD@ep-xxx.REGION.aws.neon.tech/DBNAME?sslmode=require" -c "select count(*) from notes;"
+```
 
 ---
 
@@ -218,7 +227,7 @@ Use `--data-only -t notes` to skip schema creation and only restore note rows. T
 
 This project was inspired by Andrej Karpathy's [LLM Wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) concept — the idea of a persistent, AI-maintained personal knowledge base where knowledge compounds over time rather than scattering across chat history. The YouTube video [*Build An AI Second Brain Knowledge Base (Step-By-Step)*](https://www.youtube.com/watch?v=yke4fLQUsh4) helped bring that concept into focus.
 
-The architecture here takes a different approach: rather than an LLM-maintained wiki, LearnStack is a RAG system — you write the notes, they get embedded, and the system retrieves and answers from what you actually captured. The implementation is my own, built incrementally over thirteen phases as a learning exercise in FastAPI, Postgres, pgvector, LLM API integration, agent loops, and cloud deployment.
+The architecture here takes a different approach: rather than an LLM-maintained wiki, LearnStack is a RAG system — you write the notes, they get embedded, and the system retrieves and answers from what you actually captured. The implementation is my own, built incrementally over fourteen phases as a learning exercise in FastAPI, Postgres, pgvector, LLM API integration, agent loops, and cloud deployment.
 
 ---
 
