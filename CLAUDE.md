@@ -48,9 +48,13 @@ Phase 14 (Neon database migration) moved the production Postgres database off Re
 
 The first real deploy surfaced a gap the local verification had missed: the Alembic migration engine in `env.py` built its own connection and bypassed the SSL fix, crashing `alembic upgrade head` on the `sslmode` param before the app could start. The fix made the helper shared across both connection paths — captured in the decisions log and Follow-ups.
 
-**Phase 15 — Planned next (Insights).** A scheduled clustering pipeline over note embeddings. See the Phase 15 section below.
+**Future phases are unnumbered.** Completed phases keep their numbers as a historical record; upcoming work is listed in order *without* numbers, so phases can be reordered or inserted without renumbering everything downstream. The future phases below are in intended order.
 
-**Phase 16 — Planned (Authentication).** HTTP Basic Auth on the Render deployment so the app can be shared without being fully public. See the deferred list below; a full phase plan will be written when it comes up (Auth does not yet have a standalone phase section).
+**Future phase — MCP server (next up).** A local (stdio) Model Context Protocol server exposes LearnStack's notes tools (`search_notes`, `create_note`) so any MCP host (Claude Code, Claude Desktop) can search and capture notes straight into the Neon system-of-record database. `create_note` stages to a `pending_notes` table for review/edit/approval via a new "Pending" tab in the web UI before anything is embedded. See the MCP server section below.
+
+**Future phase — Authentication + remote MCP.** HTTP Basic Auth gates all routes so the app can be shared without being fully public, and the MCP server is exposed remotely (over HTTP, with auth) rather than only over local stdio. Bundled because standing up a public write endpoint is exactly when the app should stop being unauthenticated; may split if the remote-MCP auth (OAuth) proves heavy. No standalone section yet — a full plan will be written when it comes up.
+
+**Future phase — Insights.** A scheduled clustering pipeline over note embeddings. See the Insights section below.
 
 ---
 
@@ -68,8 +72,9 @@ The first real deploy surfaced a gap the local verification had missed: the Alem
 | 12 | Continuous integration | GitHub Actions runs the test suite on every PR; a branch-protection rule gates merges to `main` |
 | 13 | Logging | Leveled logging across the app's boundaries and error paths; `LOG_LEVEL`-configurable and observable on Render |
 | 14 | Neon database migration | Production Postgres moved from Render's expiring free tier to Neon; web service stays on Render |
-| 15 | Insights | A scheduled job clusters note embeddings into topics and labels them; `/insights` shows the results |
-| 16 | Authentication | HTTP Basic Auth gates all routes; credentials set via env vars, changeable without code changes |
+| — | MCP server | Local stdio MCP server exposes `search_notes` + `create_note` (staged via `pending_notes`, reviewed in a "Pending" tab); notes land in Neon |
+| — | Authentication + remote MCP | HTTP Basic Auth gates all routes (env-var credentials); the MCP server is exposed remotely with auth |
+| — | Insights | A scheduled job clusters note embeddings into topics and labels them; `/insights` shows the results |
 
 **Embedding model:** OpenAI text-embedding API (industry standard, fractions of a cent per note for personal use).
 
@@ -219,7 +224,49 @@ Verified: locally against live Neon before deploy — connecting through `app.da
 
 ---
 
-## Phase 15 — Planned (Insights)
+## Future phase — MCP server (next up)
+
+**Goal:** A local (stdio) MCP server exposes LearnStack's notes tools — `search_notes` (read) and `create_note` (staged write) — over the Model Context Protocol, so any MCP host (Claude Code, Claude Desktop) can search and capture notes that land in the **Neon** system-of-record database. `create_note` stages to a new `pending_notes` table; the note is reviewed, edited, and approved in a new "Pending" tab in the web UI, and only then embedded and promoted into the `notes` table. Done when: from Claude Code, "create a note about X" stages a pending note in Neon, and approving it in the Pending tab produces a `notes` row identical to one created any other way.
+
+**Why:** Two things at once. (1) It builds the **provider side** of the agent/tool pattern — Phase 11 built the *host* side (the `/chat` loop that decides which tool to call); this exposes tools *over the protocol* so any host can use them. That's a distinct, marketable skill (MCP is the default integration layer across the industry), and having both sides demonstrates the whole pattern. (2) It fixes a real, felt sync problem: notes captured from Claude Code currently reach only **local** Docker via `import_notes.py`, so Neon — what the deployed app reads — drifts. With Neon as the system of record and the MCP `create_note` pointed at `DATABASE_URL` (= Neon), capturing from Claude Code lands the note in production, behind a review gate. The staged-write gate applies the "nothing writes to the system of record without a checkpoint" instinct to an agentic interface — a data-governance pattern, not just a wired-up function call.
+
+**Internal build sequence (one phase, ordered for learning):**
+1. **`search_notes` (read-only) first** — stands up the entire MCP server: server, tool discovery, schema, stdio transport, connecting Claude Code to it. Zero write risk, so this is where the pure "learn MCP" work lives. Reuses `crud.search_notes_semantic`.
+2. **`create_note` (write)** — stages to the new `pending_notes` table. Does **not** touch `notes` and does **not** embed.
+3. **"Pending" review** — the web-UI tab to list / edit / approve / reject staged notes. Approve calls the **existing** `crud.create_note` (embeds the final text, inserts into `notes`, deletes the pending row).
+
+The gate (steps 2–3) does not have to be built in lockstep with the `create_note` step during branch dev, but it **must be in place before the phase merges to `main`** — merge auto-deploys and points the live tool at Neon, so no ungated write to the system of record may ship.
+
+**Planned components:**
+- [ ] `app/schemas/note.py` — promote the tool prompt assets to shared constants so `/chat` and the MCP server can't drift: move `SEARCH_NOTES_TOOL` (full definition) out of `assistant.py`; add `NOTE_QUALITY_GUIDANCE` (extracted from `assistant._SYSTEM`) and a shared `create_note` trigger string. `NOTE_TOOL_INPUT_SCHEMA` already lives here. (`app/agent.py` may adopt these opportunistically; not required this phase.)
+- [ ] `app/assistant.py` — refactored to consume the shared constants: `_SYSTEM` references `NOTE_QUALITY_GUIDANCE`; `_SEARCH_NOTES_TOOL`/`_CREATE_NOTE_TOOL` descriptions built from the shared trigger. Behavior unchanged; existing tests stay green.
+- [ ] `app/mcp_server.py` (new) — FastMCP server. Registers `search_notes` (reuses `crud.search_notes_semantic`) and `create_note` (writes to `pending_notes`). `create_note` description = shared trigger + a per-surface behavior clause (“stages as pending for review”) + `NOTE_QUALITY_GUIDANCE`; `input_schema` = `NOTE_TOOL_INPUT_SCHEMA`; `search_notes` reuses the shared def. DB target via `DATABASE_URL`.
+- [ ] Alembic migration — new `pending_notes` table with the writable `NoteCreate` fields (`title`, `content`, `note_type`, `tool`, `project`, `topic`) plus `id` and `created_at`. **No embedding column** — embedding happens only on promotion to `notes`.
+- [ ] `app/crud/` — pending CRUD: `create_pending`, `list_pending`, `update_pending`, `approve_pending` (→ calls existing `create_note`, then deletes the pending row), `reject_pending`.
+- [ ] `app/routers/` — endpoints backing the Pending tab (list / edit / approve / reject).
+- [ ] `static/index.html` — new "Pending" tab: list staged notes, edit fields inline, Approve / Reject.
+- [ ] `tests/` — MCP tool dispatch (mock crud); pending CRUD incl. approve-promotes-and-embeds (embedding mocked by the existing autouse `mock_embeddings` fixture); Pending endpoint tests.
+
+**Design decisions (proposed):**
+- **One phase, internally sequenced read → write → review**, gate present before merge — keeps concepts unmixed while never shipping an ungated write to the system of record.
+- **Local (stdio) transport; DB target config-driven via `DATABASE_URL` (set to Neon).** Solves the sync problem immediately and privately (stdio is you-only by construction); going remote later is an additive layer (transport + auth), reused wholesale — that's the separate **Authentication + remote MCP** phase, not this one.
+- **Neon = system of record; local Docker = dev/test scratch.** The MCP write path targets Neon; this is the project accepting that Neon, not local, holds the real notes.
+- **Staged writes = a separate `pending_notes` table, not a `status` column on `notes`.** Keeps the `notes` table invariant clean (every row is a real, approved, embedded note — no NULL-embedding half-rows), so no read path — present or future, embedding-based or not — needs to know "pending" exists. Editing a pending note is a cheap text `UPDATE`; **embedding happens once, at approval, on the final text**, never on a draft still being edited or one that gets rejected.
+- **Reuse the existing note contract and write path.** MCP `create_note` uses `NOTE_TOOL_INPUT_SCHEMA`; approval calls the existing `crud.create_note`, so an approved note is byte-for-byte the same shape as any other. The `notes-inbox/_template.md` frontmatter/body maps 1:1 onto those same fields — the markdown template and the schema are two views of one note shape, so the MCP path honors the template without routing through a `.md` file.
+- **DRY the prompt assets, truthfully.** `search_notes` is shared verbatim; `NOTE_QUALITY_GUIDANCE` and the `create_note` trigger are shared; `/chat` keeps the guidance in its **system prompt** while MCP carries it on the **tool description** (MCP servers can't set the host's system prompt). The one intentionally *un*-shared bit is `create_note`'s behavior sentence — `/chat` "proposes a draft in the trace, never persists" vs MCP "stages a pending row" — because the surfaces genuinely persist differently. Share the contract and the policy; keep surface-specific behavior prose per surface (Phase 11 principle).
+- **Keep `app/assistant.py` / `/chat`.** Different surface and audience — an in-app assistant that needs no Claude client, vs. a bring-your-own-Claude host pointed at the MCP server. Keeping both shows both sides of the protocol; they share `crud` + schema, so there's one source of truth for behavior with two front doors (as `/draft`, `/chat`, and REST `/notes` already coexist).
+- **Review/edit/approve happens in the web-UI "Pending" tab** — a human checkpoint at a real UI, the durable version of the ephemeral review gate `/draft` already provides.
+
+**Risks / gotchas:**
+- **No ungated write to Neon may ship** — the gate must be in place before merge, because merge auto-deploys and points the live `create_note` at Neon.
+- **Never embed a pending note** — pending notes have no embedding, so they're absent from every embedding-based path automatically; any *new* "all notes" query must read `notes`, not `pending_notes`.
+- **The local stdio server does not change the public-exposure posture** — it's private by construction. Do **not** expose the MCP server over HTTP in this phase; remote exposure + auth is the next phase, deliberately paired with locking the app down.
+- **MCP hosts can't be given a system prompt by the server** — note-quality steering is weaker than inside `/chat`; mitigated by putting `NOTE_QUALITY_GUIDANCE` on the tool description.
+- **`notes-inbox/` + `import_notes.py` become a divergent legacy review path** (writes to *local*, while the real gate now targets Neon) — flagged in Follow-ups; decide retire-vs-repoint after this phase lands, not before.
+
+---
+
+## Future phase — Insights
 
 **Goal:** A scheduled job clusters note embeddings into topics, labels each cluster via the LLM, and stores the results so the UI can show what your notes are actually about — without asking a question.
 
@@ -691,7 +738,7 @@ Decisions made during development that future work should respect.
 
 Do not build these until the relevant phase is reached:
 
-- Authentication (Phase 16) — HTTP Basic Auth gating all routes; credentials via env vars
+- Authentication (future phase — bundled with remote MCP) — HTTP Basic Auth gating all routes; credentials via env vars
 - Job postings and application tracking — separate table with dedicated fields; not stored in notes; no target phase
 - URL fetching in the draft agent — paste-only for now; defer to a later phase
 - Multi-user support (not planned)
@@ -713,6 +760,7 @@ Items to revisit at no fixed deadline. Not deferred features — these are code 
 | `app/assistant.py` | `/chat` conversation history is text-only | The loop replays prior user/assistant text but not `tool_use`/`tool_result` blocks, so cross-turn tool context isn't preserved. Fine at current scale; revisit if multi-turn tool continuity matters. |
 | `app/database.py` | Engine + `DATABASE_URL` check run at import time | Importing the module requires a live `DATABASE_URL` and builds the engine eagerly — which is why CI had to set `DATABASE_URL` even though tests override the session. The lazy-init pattern used by `_client()` in `agent.py`/`llm.py`/`embeddings.py` would defer this so import doesn't depend on env. Low priority; the CI env var is a fine workaround. |
 | `app/assistant.py`, `app/routers/assistant.py` | Request-correlation ID through the `/chat` loop (Phase 13 stretch, not built) | One `/chat` request fans out into several model calls logged as separate lines with no shared identifier, so concurrent requests interleave in the logs. Threading a request ID (e.g. via `logging` `extra=`/a filter) would let one turn's lines be grepped together. Deferred as over-engineering at single-user scale; revisit if concurrency or log volume makes interleaving a real problem. |
+| `notes-inbox/`, `import_notes.py` | Legacy note-capture path once MCP + pending/approve lands | With Neon as the system of record and the MCP `create_note` → `pending_notes` → approve flow providing the review gate, the markdown-inbox workflow (which writes to *local* Docker) becomes a second, divergent review path pointed at the wrong database. Decide whether to retire it or repoint it at Neon. Revisit after the MCP write path exists — not before. |
 
 ---
 
