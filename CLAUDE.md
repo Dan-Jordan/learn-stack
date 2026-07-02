@@ -239,7 +239,7 @@ The gate (steps 2–3) does not have to be built in lockstep with the `create_no
 - [x] `app/prompts.py` (new) — shared model-steering prose: `SEARCH_NOTES_TOOL` (full def), `CREATE_NOTE_TRIGGER`, `NOTE_QUALITY_GUIDANCE`, moved out of `assistant.py`. **Landed in a new `app/prompts.py`, not `schemas/note.py` as first sketched** — the prose is a different concern from the Pydantic models; `NOTE_TOOL_INPUT_SCHEMA` (the note *data contract*) stays in `schemas/note.py` beside `NoteCreate`. `app/agent.py` also adopted `NOTE_QUALITY_GUIDANCE`.
 - [x] `app/assistant.py` / `app/agent.py` — consume the shared constants. `/chat`'s `_SYSTEM` and `create_note` description are byte-identical to before; `/draft`'s guidance now uses the shared wording. All existing tests stay green (34 passed).
 - [ ] `app/mcp_server.py` (new) — **low-level `mcp.server.Server`, not FastMCP** (see decisions: FastMCP generates the schema *from* a typed function and can't consume our shared dict). **`search_notes` done:** `list_tools()` returns a `types.Tool` reusing `SEARCH_NOTES_TOOL`'s name/description/schema (schema value re-keyed `input_schema`→`inputSchema`); `call_tool()` validates input against the schema, then dispatches to `crud.search_notes_semantic` on a per-call `AsyncSessionLocal`. **`create_note` (staged write) still to come.** DB target via `DATABASE_URL`; logging goes to **stderr** because stdout is the JSON-RPC channel.
-- [ ] Alembic migration — new `pending_notes` table with the writable `NoteCreate` fields (`title`, `content`, `note_type`, `tool`, `project`, `topic`) plus `id` and `created_at`. **No embedding column** — embedding happens only on promotion to `notes`.
+- [x] Alembic migration + `PendingNote` model — new `pending_notes` table with the writable `NoteCreate` fields (`title`, `content`, `note_type`, `tool`, `project`, `topic`) plus `id` and `created_at`. **No embedding column** — embedding happens only on promotion to `notes`. Model in `app/models/note.py`; migration `daf904df7559` uses `postgresql.ENUM(create_type=False)` so it doesn't re-create the existing `notetype` enum. Applied to local DB; suite green (34).
 - [ ] `app/crud/` — pending CRUD: `create_pending`, `list_pending`, `update_pending`, `approve_pending` (→ calls existing `create_note`, then deletes the pending row), `reject_pending`.
 - [ ] `app/routers/` — endpoints backing the Pending tab (list / edit / approve / reject).
 - [ ] `static/index.html` — new "Pending" tab: list staged notes, edit fields inline, Approve / Reject.
@@ -507,7 +507,7 @@ learnstack/
 │   ├── mcp_server.py        # Local stdio MCP server (low-level mcp.server.Server) — search_notes
 │   ├── prompts.py           # Shared tool prose: SEARCH_NOTES_TOOL, CREATE_NOTE_TRIGGER, NOTE_QUALITY_GUIDANCE
 │   ├── models/
-│   │   └── note.py          # Note ORM model, NoteType enum, embedding column
+│   │   └── note.py          # Note + PendingNote ORM models, NoteType enum, embedding column
 │   ├── schemas/
 │   │   └── note.py          # All Pydantic schemas: NoteCreate, NoteUpdate, NoteResponse,
 │   │                        #   QueryRequest, QueryResult, AskRequest, AskResponse,
@@ -571,6 +571,21 @@ learnstack/
 | updated_at | DateTime | Auto-updated |
 
 **note_type values:** `technical_note`, `command`, `error_fix`, `project_note`, `concept`, `question`
+
+### PendingNote (Phase 15 — staged MCP writes)
+
+A separate table holding notes captured via the MCP `create_note` tool, awaiting human review before promotion into `notes`. Mirrors only the writable `NoteCreate` fields — **no `embedding` column** (embedding happens once, at approval, on the final text) and **no `updated_at`** (edits are cheap text `UPDATE`s and the row is short-lived). Kept separate from `notes` so every `notes` row stays a real, approved, embedded note and no read path needs to know "pending" exists. Model: `PendingNote` in `app/models/note.py`; table created by migration `daf904df7559`.
+
+| Field | Type | Notes |
+|---|---|---|
+| id | UUID | Primary key, auto-generated |
+| title | String | Required |
+| content | Text | Required, raw Markdown |
+| note_type | Enum | Reuses the same `notetype` enum as `notes` |
+| tool | String | Optional |
+| project | String | Optional |
+| topic | String | Optional |
+| created_at | DateTime | Auto-set |
 
 ### Phase 2 additions (not yet built)
 
@@ -738,6 +753,8 @@ Decisions made during development that future work should respect.
 | Phase 15 | MCP server on low-level `mcp.server.Server`, not FastMCP | FastMCP generates a tool's schema *from* a typed function and can't consume a pre-built dict. `NOTE_TOOL_INPUT_SCHEMA` already exists as data shared with the Anthropic tools in `/chat` and `/draft`, so the contract must stay a dict with one source of truth. Low-level `Server` takes the dict directly (`types.Tool(inputSchema=…)`); FastMCP would force a second definition and reintroduce drift. Also exposes MCP's discovery/dispatch mechanics, mirroring the `/chat` loop |
 | Phase 15 | Reuse the shared schema *value*, re-keyed per API | `SEARCH_NOTES_TOOL`/`NOTE_TOOL_INPUT_SCHEMA` key the JSON schema under `input_schema` (Anthropic Messages API spelling); MCP's `types.Tool` spells it `inputSchema`. The shared artifact is the schema *value* (+ name + description); each surface supplies its own wrapper key. One contract, two spellings |
 | Phase 15 | MCP server logs to **stderr**; a fresh DB session per `call_tool` | stdio uses **stdout** for JSON-RPC — a stray log line there corrupts the protocol, so the entry point sets `basicConfig(stream=sys.stderr)`. The server is one long-lived process (not per-request), so each tool call opens its own `AsyncSessionLocal` (mirrors FastAPI's per-request session, minus the request) |
+| Phase 15 | `pending_notes` migration uses `postgresql.ENUM(name='notetype', create_type=False)` | The `notetype` enum already exists (created by the notes-table migration). Without `create_type=False`, `op.create_table` re-emits `CREATE TYPE notetype` and the migration fails. The generic `sa.Enum` doesn't honor the flag reliably; the PostgreSQL-specific `postgresql.ENUM` does. `pending_notes` and `notes` share the one enum type — single-sourced |
+| Phase 15 | `pending_notes` is a separate table; no `embedding`, no `updated_at` | Separate from `notes` so every `notes` row stays a real, approved, embedded note (no NULL-embedding half-rows) and no read path needs to know "pending" exists. No embedding because a pending note is never embedded — embedding happens once at approval on the final text. No `updated_at` because edits are cheap text `UPDATE`s and the row is short-lived (approved or rejected, then deleted) |
 
 ---
 
