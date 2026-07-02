@@ -127,3 +127,24 @@ class ToolCall(BaseModel):
 class ChatResponse(BaseModel):
     reply: str
     trace: list[ToolCall]
+
+
+class PendingNoteResponse(BaseModel):
+    """A note staged via the MCP create_note tool, awaiting review in the Pending tab.
+
+    Mirrors NoteResponse minus `updated_at` (the model has none — a pending row is short-lived
+    and edits are cheap text UPDATEs) and minus any embedding (a pending note is never embedded).
+    The pending write/edit contracts are the existing NoteCreate / NoteUpdate — a pending note's
+    writable shape *is* NoteCreate by design, so no separate create/update schema is needed.
+    """
+
+    id: uuid.UUID
+    title: str
+    content: str
+    note_type: NoteType
+    tool: str | None
+    project: str | None
+    topic: str | None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
