@@ -44,6 +44,10 @@ NOTE_TOOL_INPUT_SCHEMA = {
     },
     "required": ["title", "content", "note_type"],
 }
+# Note: the model-steering *prose* for these tools (search_notes definition, the create_note
+# trigger, the note-quality policy) lives in app/prompts.py. NOTE_TOOL_INPUT_SCHEMA stays here
+# because it mirrors NoteCreate above — two views of one note shape, kept adjacent so they
+# can't drift.
 
 
 class NoteUpdate(BaseModel):

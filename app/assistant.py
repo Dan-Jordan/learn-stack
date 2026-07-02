@@ -3,6 +3,7 @@ import os
 from anthropic import AsyncAnthropic
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.schemas.note import NOTE_TOOL_INPUT_SCHEMA
+from app.prompts import SEARCH_NOTES_TOOL, CREATE_NOTE_TRIGGER, NOTE_QUALITY_GUIDANCE
 from app.crud import notes as notes_crud
 
 logger = logging.getLogger(__name__)
@@ -16,41 +17,20 @@ def _client() -> AsyncAnthropic:
     return AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
 
-_SEARCH_NOTES_TOOL = {
-    "name": "search_notes",
-    "description": (
-        "Search the user's saved technical notes by meaning (semantic search) and return "
-        "the most relevant ones. Call this when the user asks a question their past notes "
-        "might answer, or asks what they've written about a topic."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "query": {
-                "type": "string",
-                "description": "Natural-language search query describing what to find",
-            },
-            "limit": {
-                "type": "integer",
-                "description": "Maximum number of notes to return (default 5)",
-            },
-        },
-        "required": ["query"],
-    },
-}
-
+# search_notes is shared verbatim across surfaces. create_note's *behavior* sentence is
+# assistant-specific (proposes an unsaved draft), so it stays here; only the trigger and the
+# quality policy are shared (see app/schemas/note.py).
 _CREATE_NOTE_TOOL = {
     "name": "create_note",
-        "description": (
-            "Draft a new technical note for the user to review and save. This does NOT save the "
-            "note — it proposes a draft that the user confirms and saves manually, keeping junk "
-            "out of the knowledge base. Call this when the user asks to capture, save, or note "
-            "something."
-        ),
+    "description": (
+        "Draft a new technical note for the user to review and save. This does NOT save the "
+        "note — it proposes a draft that the user confirms and saves manually, keeping junk "
+        "out of the knowledge base. " + CREATE_NOTE_TRIGGER
+    ),
     "input_schema": NOTE_TOOL_INPUT_SCHEMA,
 }
 
-_TOOLS = [_SEARCH_NOTES_TOOL, _CREATE_NOTE_TOOL]
+_TOOLS = [SEARCH_NOTES_TOOL, _CREATE_NOTE_TOOL]
 
 _SYSTEM = (
     "You are LearnStack's notes assistant. You help the user search their saved technical "
@@ -61,10 +41,7 @@ _SYSTEM = (
     "say so rather than answering from general knowledge.\n\n"
     "To capture something, call create_note. The draft is shown to the user to review and "
     "save — it is not saved automatically — so describe what you drafted rather than claiming "
-    "it is saved. Prioritize content worth retrieving later: project-specific facts, configs, "
-    "gotchas, errors and their fixes, and decisions with the reasoning behind them — the kind "
-    "of detail that fades from memory and would otherwise be re-debugged or re-decided. Trim "
-    "general concept explanations the user already understands or could easily re-look-up.\n\n"
+    "it is saved. " + NOTE_QUALITY_GUIDANCE + "\n\n"
     "If no tool is needed, just reply directly."
 )
 
