@@ -55,6 +55,7 @@ The project serves two purposes simultaneously:
 | Testing | pytest + httpx |
 | Embeddings | OpenAI text-embedding API + pgvector |
 | LLM | Anthropic Claude (Haiku) |
+| MCP | Model Context Protocol SDK (`mcp`) — local stdio server |
 | Web UI | Plain HTML + fetch() (no framework) |
 | Cloud | Render (web service) + Neon (Postgres) |
 
@@ -170,6 +171,24 @@ The level convention:
 | `ERROR` / `exception` | Failures | an embedding or model call that raised |
 
 Logs never include API keys, embedding vectors, or note content — only ids, changed field names, sizes, and counts. On Render, set `LOG_LEVEL` in `render.yaml` (committed as a non-secret default) and redeploy to change verbosity.
+
+### MCP server (Claude Code integration)
+
+LearnStack ships a local [Model Context Protocol](https://modelcontextprotocol.io) server (`app/mcp_server.py`) that exposes your notes tools to any MCP host — Claude Code, Claude Desktop — over stdio. It currently exposes **`search_notes`** (semantic search over your notes); `create_note` is in progress. The server reads the database pointed at by `DATABASE_URL`, so aiming it at your Neon connection string searches your system-of-record notes.
+
+Register it with Claude Code at **local scope** — the config lives in `~/.claude.json` (private to you); nothing is added to the repo:
+
+```powershell
+claude mcp add-json learnstack '{"command":"C:/Projects/learn-stack/.venv/Scripts/python.exe","args":["-m","app.mcp_server"]}'
+```
+
+Adjust the `command` path to your venv's Python. Restart Claude Code, approve the server when prompted, then ask it to search — e.g. *"search my LearnStack notes about Neon SSL"*.
+
+- The server is a **subprocess of the host**: it starts when Claude Code connects and shuts down when you exit — nothing keeps listening afterward.
+- It needs `OPENAI_API_KEY` (to embed the query) and `DATABASE_URL`, both read from `.env`.
+- stdio uses **stdout** for the JSON-RPC protocol, so the server logs to **stderr**.
+
+> Why `add-json` and not `claude mcp add … -- python -m app.mcp_server`? The plain `add` command's parser treats the `-m` as its own flag and errors; passing the args as a JSON array sidesteps that. Local scope is the default for `add-json`.
 
 ---
 
