@@ -42,17 +42,15 @@ When working on Phase 1–3, keep the RAG architecture in mind even when not bui
 
 ## Current phase
 
-**Phase 14 — Complete ✓**
+**Phase 15 — In progress**
 
-Phase 14 (Neon database migration) moved the production Postgres database off Render's expiring free tier onto Neon's free tier; the web service stays on Render. `app/database.py` and `alembic/env.py` now share `split_ssl_args()`, which strips Neon's libpq-only `sslmode`/`channel_binding` params and passes SSL via asyncpg's `connect_args` — a no-op for the local/CI URL, so local dev, tests, and CI are untouched. `render.yaml` no longer provisions a database. The app is deployed and live against Neon, and the existing notes were copied across with `pg_dump`/`pg_restore`. See the Phase 14 section below.
+Phase 15 stands up a local (stdio) MCP server that exposes LearnStack's notes tools — `search_notes` (read) and `create_note` (staged write) — over the Model Context Protocol, so any MCP host (Claude Code, Claude Desktop) can search and capture notes into the **Neon** system-of-record database. `create_note` stages to a new `pending_notes` table; the note is reviewed, edited, and approved in a new "Pending" tab in the web UI, and only then embedded and promoted into `notes`. Built read-first (`search_notes`) to stand up the whole server with zero write risk, then the gated write path. See the Phase 15 section below.
 
-The first real deploy surfaced a gap the local verification had missed: the Alembic migration engine in `env.py` built its own connection and bypassed the SSL fix, crashing `alembic upgrade head` on the `sslmode` param before the app could start. The fix made the helper shared across both connection paths — captured in the decisions log and Follow-ups.
+Phase 14 (Neon database migration) is complete — production Postgres now lives on Neon, with the web service still on Render. See the Phase 14 section below.
 
 **Future phases are unnumbered.** Completed phases keep their numbers as a historical record; upcoming work is listed in order *without* numbers, so phases can be reordered or inserted without renumbering everything downstream. The future phases below are in intended order.
 
-**Future phase — MCP server (next up).** A local (stdio) Model Context Protocol server exposes LearnStack's notes tools (`search_notes`, `create_note`) so any MCP host (Claude Code, Claude Desktop) can search and capture notes straight into the Neon system-of-record database. `create_note` stages to a `pending_notes` table for review/edit/approval via a new "Pending" tab in the web UI before anything is embedded. See the MCP server section below.
-
-**Future phase — Authentication + remote MCP.** HTTP Basic Auth gates all routes so the app can be shared without being fully public, and the MCP server is exposed remotely (over HTTP, with auth) rather than only over local stdio. Bundled because standing up a public write endpoint is exactly when the app should stop being unauthenticated; may split if the remote-MCP auth (OAuth) proves heavy. No standalone section yet — a full plan will be written when it comes up.
+**Future phase — Authentication + remote MCP (next up after Phase 15).** HTTP Basic Auth gates all routes so the app can be shared without being fully public, and the MCP server is exposed remotely (over HTTP, with auth) rather than only over local stdio. Bundled because standing up a public write endpoint is exactly when the app should stop being unauthenticated; may split if the remote-MCP auth (OAuth) proves heavy. No standalone section yet — a full plan will be written when it comes up.
 
 **Future phase — Insights.** A scheduled clustering pipeline over note embeddings. See the Insights section below.
 
@@ -72,7 +70,7 @@ The first real deploy surfaced a gap the local verification had missed: the Alem
 | 12 | Continuous integration | GitHub Actions runs the test suite on every PR; a branch-protection rule gates merges to `main` |
 | 13 | Logging | Leveled logging across the app's boundaries and error paths; `LOG_LEVEL`-configurable and observable on Render |
 | 14 | Neon database migration | Production Postgres moved from Render's expiring free tier to Neon; web service stays on Render |
-| — | MCP server | Local stdio MCP server exposes `search_notes` + `create_note` (staged via `pending_notes`, reviewed in a "Pending" tab); notes land in Neon |
+| 15 | MCP server | Local stdio MCP server exposes `search_notes` + `create_note` (staged via `pending_notes`, reviewed in a "Pending" tab); notes land in Neon |
 | — | Authentication + remote MCP | HTTP Basic Auth gates all routes (env-var credentials); the MCP server is exposed remotely with auth |
 | — | Insights | A scheduled job clusters note embeddings into topics and labels them; `/insights` shows the results |
 
@@ -224,7 +222,7 @@ Verified: locally against live Neon before deploy — connecting through `app.da
 
 ---
 
-## Future phase — MCP server (next up)
+## Phase 15 — In progress
 
 **Goal:** A local (stdio) MCP server exposes LearnStack's notes tools — `search_notes` (read) and `create_note` (staged write) — over the Model Context Protocol, so any MCP host (Claude Code, Claude Desktop) can search and capture notes that land in the **Neon** system-of-record database. `create_note` stages to a new `pending_notes` table; the note is reviewed, edited, and approved in a new "Pending" tab in the web UI, and only then embedded and promoted into the `notes` table. Done when: from Claude Code, "create a note about X" stages a pending note in Neon, and approving it in the Pending tab produces a `notes` row identical to one created any other way.
 
