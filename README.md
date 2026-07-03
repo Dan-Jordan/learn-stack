@@ -21,7 +21,8 @@ LearnStack is not a second brain. It is a backend application that earns its com
 - Draft structured notes from raw pasted content via `POST /draft` — paste a doc, Stack Overflow answer, or any text and get a structured note back for review
 - Chat with a multi-tool assistant via `POST /chat` — an agent loop that decides per turn whether to search your notes, draft a new one, or just reply; drafted notes are returned for review, never auto-saved
 - Full CRUD via a FastAPI REST API
-- Single-page web UI at `/` — Draft & Save, Notes, Ask, Semantic Search, and Assistant tabs; no JSON editing required
+- Single-page web UI at `/` — Draft & Save, Notes, Pending, Ask, Assistant, and Semantic Search tabs; no JSON editing required
+- Capture notes from any MCP host (Claude Code, Claude Desktop) via a local stdio MCP server exposing `search_notes` (read) and `create_note` (staged write) — captured notes land in a review queue, surfaced in the web UI's **Pending** tab, and are only embedded into your notes on approval
 - Postgres backend with pgvector extension, schema managed by Alembic migrations
 - Embeddings generated automatically on note create/update via OpenAI text-embedding API
 - Two note capture paths: the web UI's Draft & Save tab (browser), or a markdown inbox workflow (`notes-inbox/` → `import_notes.py`) for capturing notes from the terminal/Claude Code without context-switching
@@ -47,14 +48,16 @@ The project serves two purposes simultaneously:
 |---|---|
 | Python | 3.11+ |
 | Backend | FastAPI |
-| Database | PostgreSQL 15 (local) / 18 on Neon (prod) |
+| Database | PostgreSQL 15 (local Docker) / 18 (Neon, prod) |
+| Vector search | pgvector (0.8.0 local / 0.8.1 Neon) |
 | ORM | SQLAlchemy 2.x (async) |
 | Schemas | Pydantic v2 |
 | Migrations | Alembic |
 | Environment | Docker Compose |
 | Testing | pytest + httpx |
-| Embeddings | OpenAI text-embedding API + pgvector |
-| LLM | Anthropic Claude (Haiku) |
+| Embeddings | OpenAI text-embedding-3-small |
+| LLM | Anthropic Claude (Haiku 4.5) |
+| MCP | Model Context Protocol SDK (`mcp>=1.28.0`) — local stdio server (low-level `Server`) |
 | Web UI | Plain HTML + fetch() (no framework) |
 | Cloud | Render (web service) + Neon (Postgres) |
 
@@ -104,6 +107,9 @@ Deliberate, leveled logging across the app's boundaries — the OpenAI/Anthropic
 ### Phase 14 — Neon database migration ✓
 Moved the production Postgres database from Render's expiring free tier to [Neon](https://neon.tech) (free tier, with `pgvector`); the web service stays on Render. `app/database.py` and `alembic/env.py` share `split_ssl_args()`, which strips Neon's libpq-only `sslmode`/`channel_binding` params and passes SSL via asyncpg's `connect_args` — a no-op for the local/CI URL. `render.yaml` no longer provisions a database. Existing notes copied across with `pg_dump`/`pg_restore`. See [Cloud deployment](#cloud-deployment-render--neon) below.
 
+### Phase 15 — Local MCP server ✓
+A local (stdio) [Model Context Protocol](https://modelcontextprotocol.io) server (`app/mcp_server.py`) exposes LearnStack's notes tools to any MCP host (Claude Code, Claude Desktop): **`search_notes`** (semantic search) and **`create_note`** (a *staged* write). `create_note` inserts into a new `pending_notes` table — it never writes `notes` directly and never embeds. Staged notes are reviewed, edited, and approved in a new **Pending** tab in the web UI; approval promotes the note into `notes` via the existing write path (embedding the final text) and deletes the pending row. Pointed at `DATABASE_URL=<Neon>`, the server captures into the system-of-record database behind that human review gate. Built on the low-level `mcp.server.Server` so the tool schema/prose is reused verbatim from the existing Anthropic tools. 48 passing tests (14 new). See [MCP server](#mcp-server-claude-code--claude-desktop) below.
+
 ---
 
 ## Getting started
@@ -132,6 +138,8 @@ The script handles everything in order:
 7. Starts the FastAPI dev server at `http://localhost:8000/`
 
 **First run only:** the Docker build compiles pgvector from source — expect about a minute. Subsequent runs start in seconds.
+
+> **macOS / Linux:** `setup.ps1` is Windows PowerShell only (a `setup.sh` is a future addition). Run the same seven steps by hand: `docker compose up -d` → create and activate a venv (`python -m venv .venv && source .venv/bin/activate`) → `pip install -r requirements.txt` → `cp .env.example .env` and fill in your API keys → `alembic upgrade head` → create the test database (`createdb learnstack_test` and `CREATE EXTENSION IF NOT EXISTS vector` in it, or use `docker exec`) → `uvicorn app.main:app --reload`.
 
 ### API keys required
 
@@ -171,11 +179,62 @@ The level convention:
 
 Logs never include API keys, embedding vectors, or note content — only ids, changed field names, sizes, and counts. On Render, set `LOG_LEVEL` in `render.yaml` (committed as a non-secret default) and redeploy to change verbosity.
 
+### MCP server (Claude Code + Claude Desktop)
+
+LearnStack ships a local [Model Context Protocol](https://modelcontextprotocol.io) server (`app/mcp_server.py`) that exposes your notes tools to any MCP host — Claude Code, Claude Desktop — over stdio:
+
+- **`search_notes`** — semantic search over your notes (embeds the query, needs `OPENAI_API_KEY`).
+- **`create_note`** — a **staged** write: it inserts into the `pending_notes` table and does *not* embed. The staged note is reviewed, edited, and approved in the web UI's **Pending** tab; only on approval is it embedded and promoted into `notes`. Nothing an MCP host captures reaches your knowledge base without that human checkpoint.
+
+The server connects to whatever `DATABASE_URL` is set in its process environment. To capture into your **system-of-record (Neon)** notes, launch it with `DATABASE_URL` = your Neon connection string. Because `app/database.py` calls `load_dotenv(override=False)`, a `DATABASE_URL` provided in the host's env block **wins over the repo `.env`** — so the MCP server talks to Neon while your local web app and tests keep using the Docker `.env`. **Do not** point the repo `.env` at Neon (that would send local dev and `pytest` to production); set Neon only in the MCP server's own launch env.
+
+> **Prerequisite for `create_note` against Neon:** the `pending_notes` table must exist in Neon. It is created by the startup migration (`alembic upgrade head`) on the next Render deploy after this phase merges to `main`. `search_notes` works against Neon immediately (the `notes` table already exists).
+
+#### Claude Code (VS Code CLI and chat share one config)
+
+Register at **local scope** (stored in `~/.claude.json`, private to you — nothing is committed). Substitute your Neon URL, OpenAI key, and venv path:
+
+```powershell
+claude mcp add-json learnstack '{"command":"C:/Projects/learn-stack/.venv/Scripts/python.exe","args":["-m","app.mcp_server"],"env":{"DATABASE_URL":"<NEON_URL>","OPENAI_API_KEY":"<OPENAI_KEY>","PYTHONPATH":"C:/Projects/learn-stack"}}'
+```
+
+> Why `add-json` and not `claude mcp add … -- python -m app.mcp_server`? The plain `add` command's parser treats the `-m` as its own flag and errors; passing the config as a JSON blob sidesteps that. Local scope is the default for `add-json`.
+
+#### Claude Desktop
+
+Add an `mcpServers` entry to `%APPDATA%\Claude\claude_desktop_config.json` (create the key if it doesn't exist), then fully quit and reopen Claude Desktop:
+
+```json
+{
+  "mcpServers": {
+    "learnstack": {
+      "command": "C:/Projects/learn-stack/.venv/Scripts/python.exe",
+      "args": ["-m", "app.mcp_server"],
+      "env": {
+        "DATABASE_URL": "<NEON_URL>",
+        "OPENAI_API_KEY": "<OPENAI_KEY>",
+        "PYTHONPATH": "C:/Projects/learn-stack"
+      }
+    }
+  }
+}
+```
+
+Use the same Neon string you gave Render (scheme `postgresql+asyncpg://…`, keep the `?sslmode=…&channel_binding=…` params — the app strips them at runtime). `PYTHONPATH` lets `-m app.mcp_server` import the `app` package regardless of the host's working directory.
+
+Then, from the host, ask it to capture a note — e.g. *"save a LearnStack note about the Neon SSL gotcha"*. It calls `create_note`, which stages the note; review and approve it in the **Pending** tab of the app instance pointed at the same database (the deployed Render app for Neon, or a local app run with `DATABASE_URL=<Neon>`).
+
+- The server is a **subprocess of the host**: it starts when the host connects and shuts down when you exit — nothing keeps listening afterward.
+- stdio uses **stdout** for the JSON-RPC protocol, so the server logs to **stderr**.
+- Neon autosuspends on idle, so the first tool call after a quiet period is slow (~1–3s wake); `pool_pre_ping` keeps it from erroring on a dropped connection.
+
 ---
 
 ## Cloud deployment (Render + Neon)
 
 LearnStack runs as a Docker web service on [Render](https://render.com), backed by a [Neon](https://neon.tech) Postgres database (free tier, with `pgvector`). The web service config lives in `render.yaml`; the database is hosted on Neon and connected via the `DATABASE_URL` secret. (Earlier the database was Render-managed; it was moved to Neon because Render's free Postgres suspends after 30 days — see the migration notes in `CLAUDE.md`, Phase 14.)
+
+> **Render and Neon are the hosts this project happens to use, not requirements.** The only hard dependencies are **Postgres with the `pgvector` extension** and an async connection via the `postgresql+asyncpg://` scheme — any provider that offers those works (Supabase, Render Postgres, AWS RDS, a self-hosted instance, etc.), as does any Docker-capable web host in place of Render. The connection handling is provider-agnostic: `split_ssl_args` in `app/database.py` strips libpq-only SSL params (`sslmode`, `channel_binding`) from *any* URL that carries them and is a no-op otherwise, so a different host's connection string needs no code change. The steps below use Neon + Render as a concrete, worked example — substitute your own and the walkthrough still applies. (The embedding and LLM providers — OpenAI and Anthropic — *are* wired into the code and are not swappable without changes.)
 
 ### First deploy
 
@@ -200,6 +259,8 @@ intervention if needed, but startup migration remains the primary mechanism.)
 ### Loading notes into the cloud database (Neon)
 
 `pg_dump` and `pg_restore` are not installed locally — Postgres runs inside Docker, so these commands run via `docker exec`. The destination is Neon's connection string (use the plain `postgresql://...` form here, **not** the `+asyncpg` SQLAlchemy variant — `pg_dump`/`pg_restore` are libpq tools and understand `sslmode`/`channel_binding` natively).
+
+> The container is named `learn-stack-db-1` below — Docker Compose derives that from the project (folder) name, so if you cloned into a differently-named directory yours will differ. Run `docker ps` to get the actual name and substitute it in the commands.
 
 ```powershell
 # Dump the notes table from local Docker Postgres (schema + data, custom format)
@@ -227,7 +288,7 @@ docker exec -t learn-stack-db-1 psql "postgresql://USER:PASSWORD@ep-xxx.REGION.a
 
 This project was inspired by Andrej Karpathy's [LLM Wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) concept — the idea of a persistent, AI-maintained personal knowledge base where knowledge compounds over time rather than scattering across chat history. The YouTube video [*Build An AI Second Brain Knowledge Base (Step-By-Step)*](https://www.youtube.com/watch?v=yke4fLQUsh4) helped bring that concept into focus.
 
-The architecture here takes a different approach: rather than an LLM-maintained wiki, LearnStack is a RAG system — you write the notes, they get embedded, and the system retrieves and answers from what you actually captured. The implementation is my own, built incrementally over fourteen phases as a learning exercise in FastAPI, Postgres, pgvector, LLM API integration, agent loops, and cloud deployment.
+The architecture here takes a different approach: rather than an LLM-maintained wiki, LearnStack is a RAG system — you write the notes, they get embedded, and the system retrieves and answers from what you actually captured. The implementation is my own, built incrementally over fifteen phases as a learning exercise in FastAPI, Postgres, pgvector, LLM API integration, agent loops, MCP servers, and cloud deployment.
 
 ---
 
