@@ -4,7 +4,7 @@ import os
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-from app.routers import notes, query, ask, draft, assistant, health
+from app.routers import notes, query, ask, draft, assistant, health, pending
 
 # Central logging config. The level is driven by LOG_LEVEL (default INFO) so verbosity can be
 # turned up/down on Render without a code change; an unrecognized value falls back to INFO
@@ -27,6 +27,7 @@ app.include_router(query.router)
 app.include_router(ask.router)
 app.include_router(draft.router)
 app.include_router(assistant.router)
+app.include_router(pending.router)
 app.include_router(health.router)
 
 app.mount("/static", StaticFiles(directory="static"), name="static")

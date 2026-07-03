@@ -52,12 +52,27 @@ def mock_embeddings():
 
 
 @pytest.fixture
-async def client():
+async def engine():
+    """One engine per test: create the schema empty, hand it out, drop it on teardown.
+
+    Shared by `client` and `db_session` so requests and directly-seeded rows hit the same DB —
+    needed for paths with no HTTP create endpoint (e.g. pending notes are staged only via MCP).
+    """
     engine = create_async_engine(TEST_DATABASE_URL)
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
+    yield engine
+
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
+
+    await engine.dispose()
+
+
+@pytest.fixture
+async def client(engine):
     TestSession = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
     async def override_get_db():
@@ -71,7 +86,10 @@ async def client():
 
     app.dependency_overrides.clear()
 
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
 
-    await engine.dispose()
+@pytest.fixture
+async def db_session(engine):
+    """A session on the same engine as `client`, for seeding/asserting DB state directly."""
+    TestSession = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with TestSession() as session:
+        yield session
