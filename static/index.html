@@ -217,6 +217,7 @@
 <nav>
   <button class="active" data-tab="draft">Draft &amp; Save</button>
   <button data-tab="notes">Notes</button>
+  <button data-tab="pending">Pending</button>
   <button data-tab="ask">Ask</button>
   <button data-tab="assistant">Assistant</button>
   <button data-tab="query">Semantic Search</button>
@@ -300,6 +301,23 @@
 
     <div id="notes-status" class="status"></div>
     <div id="notes-list"></div>
+  </section>
+
+  <!-- ── PENDING ──────────────────────────────────────────── -->
+  <section id="tab-pending" class="tab">
+    <h2>Pending review</h2>
+    <p style="color:var(--muted);font-size:13px;margin-bottom:16px;">
+      Notes captured via the MCP <code>create_note</code> tool, staged for review. Edit any field,
+      then <strong>Approve</strong> to embed and save it into your notes, or <strong>Reject</strong>
+      to discard it. Nothing here is in your knowledge base until approved.
+    </p>
+
+    <div style="display:flex;gap:10px;margin-bottom:16px;align-items:center;">
+      <button class="btn btn-ghost" id="btn-pending-refresh">Refresh</button>
+      <div class="status" id="pending-status"></div>
+    </div>
+
+    <div id="pending-list"></div>
   </section>
 
   <!-- ── ASK ──────────────────────────────────────────────── -->
@@ -568,6 +586,139 @@
   // Load notes when the Notes tab is first opened
   document.querySelector('[data-tab="notes"]').addEventListener('click', () => {
     if (!document.getElementById('notes-list').children.length) loadNotes('');
+  });
+
+  // ── Pending review ─────────────────────────────────────────
+  const NOTE_TYPES = ['technical_note','command','error_fix','project_note','concept','question'];
+
+  function typeOptions() {
+    return NOTE_TYPES.map(t => `<option value="${t}">${t}</option>`).join('');
+  }
+
+  function readPendingFields(card) {
+    return {
+      title:     card.querySelector('.p-title').value.trim(),
+      content:   card.querySelector('.p-content').value.trim(),
+      note_type: card.querySelector('.p-type').value,
+      tool:      card.querySelector('.p-tool').value.trim()    || null,
+      topic:     card.querySelector('.p-topic').value.trim()   || null,
+      project:   card.querySelector('.p-project').value.trim() || null,
+    };
+  }
+
+  function pendingEmptyIfCleared() {
+    const listEl = document.getElementById('pending-list');
+    if (!listEl.children.length) {
+      setStatus(document.getElementById('pending-status'), 'No pending notes.', '');
+    }
+  }
+
+  function renderPendingCard(p) {
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.dataset.pendingId = p.id;
+    card.innerHTML = `
+      <label>Title</label>
+      <input type="text" class="p-title" />
+      <label>Content (Markdown)</label>
+      <textarea class="p-content" style="min-height:160px;"></textarea>
+      <div class="two-col">
+        <div>
+          <label>Note type</label>
+          <select class="p-type">${typeOptions()}</select>
+        </div>
+        <div>
+          <label>Tool</label>
+          <input type="text" class="p-tool" placeholder="e.g. dbt, Docker" />
+        </div>
+      </div>
+      <div class="two-col">
+        <div>
+          <label>Topic</label>
+          <input type="text" class="p-topic" placeholder="e.g. CI/CD, testing" />
+        </div>
+        <div>
+          <label>Project</label>
+          <input type="text" class="p-project" placeholder="e.g. healthcare_claims_dbt" />
+        </div>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;margin-top:16px;">
+        <button class="btn btn-success p-approve">Approve</button>
+        <button class="btn btn-danger p-reject">Reject</button>
+        <div style="flex:1"></div>
+        <div style="font-size:11px;color:var(--muted);">Staged ${fmtDate(p.created_at)}</div>
+      </div>
+      <div class="status p-status" style="margin-top:8px;"></div>`;
+
+    // Set field values as properties (avoids attribute-escaping bugs on quotes in the content).
+    card.querySelector('.p-title').value   = p.title;
+    card.querySelector('.p-content').value = p.content;
+    card.querySelector('.p-type').value    = p.note_type;
+    card.querySelector('.p-tool').value    = p.tool    ?? '';
+    card.querySelector('.p-topic').value   = p.topic   ?? '';
+    card.querySelector('.p-project').value = p.project ?? '';
+
+    const approveBtn = card.querySelector('.p-approve');
+    const rejectBtn  = card.querySelector('.p-reject');
+    const st         = card.querySelector('.p-status');
+
+    approveBtn.addEventListener('click', async () => {
+      const payload = readPendingFields(card);
+      if (!payload.title || !payload.content) {
+        setStatus(st, 'Title and content are required.', 'err');
+        return;
+      }
+      approveBtn.disabled = true; rejectBtn.disabled = true;
+      spin(st);
+      try {
+        // Persist any inline edits first, then promote — so the embedded note reflects the edits.
+        await apiFetch('/pending/' + p.id, { method: 'PUT', body: JSON.stringify(payload) });
+        await apiFetch('/pending/' + p.id + '/approve', { method: 'POST' });
+        card.remove();
+        pendingEmptyIfCleared();
+      } catch (e) {
+        setStatus(st, 'Error: ' + e.message, 'err');
+        approveBtn.disabled = false; rejectBtn.disabled = false;
+      }
+    });
+
+    rejectBtn.addEventListener('click', async () => {
+      if (!confirm('Reject and discard this pending note?')) return;
+      approveBtn.disabled = true; rejectBtn.disabled = true;
+      spin(st);
+      try {
+        await apiFetch('/pending/' + p.id, { method: 'DELETE' });
+        card.remove();
+        pendingEmptyIfCleared();
+      } catch (e) {
+        setStatus(st, 'Error: ' + e.message, 'err');
+        approveBtn.disabled = false; rejectBtn.disabled = false;
+      }
+    });
+
+    return card;
+  }
+
+  async function loadPending() {
+    const statusEl = document.getElementById('pending-status');
+    const listEl   = document.getElementById('pending-list');
+    spin(statusEl);
+    listEl.innerHTML = '';
+    try {
+      const pending = await apiFetch('/pending?limit=100');
+      if (!pending.length) { setStatus(statusEl, 'No pending notes.', ''); return; }
+      setStatus(statusEl, `${pending.length} pending`, '');
+      pending.forEach(p => listEl.appendChild(renderPendingCard(p)));
+    } catch (e) {
+      setStatus(statusEl, 'Error: ' + e.message, 'err');
+    }
+  }
+
+  document.getElementById('btn-pending-refresh').addEventListener('click', loadPending);
+
+  // Load on first open; the list starts empty so this fires once (Refresh re-checks thereafter).
+  document.querySelector('[data-tab="pending"]').addEventListener('click', () => {
+    if (!document.getElementById('pending-list').children.length) loadPending();
   });
 
   // ── Ask ────────────────────────────────────────────────────
