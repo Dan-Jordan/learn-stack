@@ -22,7 +22,7 @@ LearnStack is not a second brain. It is a backend application that earns its com
 - Chat with a multi-tool assistant via `POST /chat` — an agent loop that decides per turn whether to search your notes, draft a new one, or just reply; drafted notes are returned for review, never auto-saved
 - Full CRUD via a FastAPI REST API
 - Single-page web UI at `/` — Draft & Save, Notes, Pending, Ask, Assistant, and Semantic Search tabs; no JSON editing required
-- Capture notes from any MCP host (Claude Code, Claude Desktop) via a local stdio MCP server exposing `search_notes` (read) and `create_note` (staged write) — captured notes land in a review queue, surfaced in the web UI's **Pending** tab, and are only embedded into your notes on approval
+- Capture notes via a local stdio MCP server exposing `search_notes` (read) and `create_note` (staged write) — any MCP-compatible host can connect, tested with Claude Code (CLI, VS Code extension, and Desktop's Claude Code shell); captured notes land in a review queue, surfaced in the web UI's **Pending** tab, and are only embedded into your notes on approval
 - Postgres backend with pgvector extension, schema managed by Alembic migrations
 - Embeddings generated automatically on note create/update via OpenAI text-embedding API
 - Two note capture paths: the web UI's Draft & Save tab (browser), or a markdown inbox workflow (`notes-inbox/` → `import_notes.py`) for capturing notes from the terminal/Claude Code without context-switching
@@ -108,7 +108,7 @@ Deliberate, leveled logging across the app's boundaries — the OpenAI/Anthropic
 Moved the production Postgres database from Render's expiring free tier to [Neon](https://neon.tech) (free tier, with `pgvector`); the web service stays on Render. `app/database.py` and `alembic/env.py` share `split_ssl_args()`, which strips Neon's libpq-only `sslmode`/`channel_binding` params and passes SSL via asyncpg's `connect_args` — a no-op for the local/CI URL. `render.yaml` no longer provisions a database. Existing notes copied across with `pg_dump`/`pg_restore`. See [Cloud deployment](#cloud-deployment-render--neon) below.
 
 ### Phase 15 — Local MCP server ✓
-A local (stdio) [Model Context Protocol](https://modelcontextprotocol.io) server (`app/mcp_server.py`) exposes LearnStack's notes tools to any MCP host (Claude Code, Claude Desktop): **`search_notes`** (semantic search) and **`create_note`** (a *staged* write). `create_note` inserts into a new `pending_notes` table — it never writes `notes` directly and never embeds. Staged notes are reviewed, edited, and approved in a new **Pending** tab in the web UI; approval promotes the note into `notes` via the existing write path (embedding the final text) and deletes the pending row. Pointed at `DATABASE_URL=<Neon>`, the server captures into the system-of-record database behind that human review gate. Built on the low-level `mcp.server.Server` so the tool schema/prose is reused verbatim from the existing Anthropic tools. 48 passing tests (14 new). See [MCP server](#mcp-server-claude-code--claude-desktop) below.
+A local (stdio) [Model Context Protocol](https://modelcontextprotocol.io) server (`app/mcp_server.py`) exposes LearnStack's notes tools — **`search_notes`** (semantic search) and **`create_note`** (a *staged* write) — to any MCP-compatible host that can launch a local subprocess; tested against Claude Code (CLI, VS Code extension, and the Claude Code shell inside Claude Desktop), registered once at user scope so one entry covers all three. `create_note` inserts into a new `pending_notes` table — it never writes `notes` directly and never embeds. Staged notes are reviewed, edited, and approved in a new **Pending** tab in the web UI; approval promotes the note into `notes` via the existing write path (embedding the final text) and deletes the pending row. Pointed at `DATABASE_URL=<Neon>`, the server captures into the system-of-record database behind that human review gate. Built on the low-level `mcp.server.Server` so the tool schema/prose is reused verbatim from the existing Anthropic tools. 48 passing tests (14 new). See [MCP server](#mcp-server) below.
 
 ---
 
@@ -179,54 +179,70 @@ The level convention:
 
 Logs never include API keys, embedding vectors, or note content — only ids, changed field names, sizes, and counts. On Render, set `LOG_LEVEL` in `render.yaml` (committed as a non-secret default) and redeploy to change verbosity.
 
-### MCP server (Claude Code + Claude Desktop)
+### MCP server
 
-LearnStack ships a local [Model Context Protocol](https://modelcontextprotocol.io) server (`app/mcp_server.py`) that exposes your notes tools to any MCP host — Claude Code, Claude Desktop — over stdio:
+LearnStack ships a local [Model Context Protocol](https://modelcontextprotocol.io) server (`app/mcp_server.py`) exposing two tools over stdio:
 
 - **`search_notes`** — semantic search over your notes (embeds the query, needs `OPENAI_API_KEY`).
 - **`create_note`** — a **staged** write: it inserts into the `pending_notes` table and does *not* embed. The staged note is reviewed, edited, and approved in the web UI's **Pending** tab; only on approval is it embedded and promoted into `notes`. Nothing an MCP host captures reaches your knowledge base without that human checkpoint.
 
-The server connects to whatever `DATABASE_URL` is set in its process environment. To capture into your **system-of-record (Neon)** notes, launch it with `DATABASE_URL` = your Neon connection string. Because `app/database.py` calls `load_dotenv(override=False)`, a `DATABASE_URL` provided in the host's env block **wins over the repo `.env`** — so the MCP server talks to Neon while your local web app and tests keep using the Docker `.env`. **Do not** point the repo `.env` at Neon (that would send local dev and `pytest` to production); set Neon only in the MCP server's own launch env.
+The server speaks plain MCP over stdio — so **any MCP-compatible host that can launch a local subprocess** can use it (Claude Code, Cursor, Windsurf, Cline, etc.). The connection info below applies to any of them; the walkthrough after it is written for Claude Code specifically, since that's the only host actually tested against this project.
 
-> **Prerequisite for `create_note` against Neon:** the `pending_notes` table must exist in Neon. It is created by the startup migration (`alembic upgrade head`) on the next Render deploy after this phase merges to `main`. `search_notes` works against Neon immediately (the `notes` table already exists).
+#### Connection info (any host)
 
-#### Claude Code (VS Code CLI and chat share one config)
-
-Register at **local scope** (stored in `~/.claude.json`, private to you — nothing is committed). Substitute your Neon URL, OpenAI key, and venv path:
-
-```powershell
-claude mcp add-json learnstack '{"command":"C:/Projects/learn-stack/.venv/Scripts/python.exe","args":["-m","app.mcp_server"],"env":{"DATABASE_URL":"<NEON_URL>","OPENAI_API_KEY":"<OPENAI_KEY>","PYTHONPATH":"C:/Projects/learn-stack"}}'
-```
-
-> Why `add-json` and not `claude mcp add … -- python -m app.mcp_server`? The plain `add` command's parser treats the `-m` as its own flag and errors; passing the config as a JSON blob sidesteps that. Local scope is the default for `add-json`.
-
-#### Claude Desktop
-
-Add an `mcpServers` entry to `%APPDATA%\Claude\claude_desktop_config.json` (create the key if it doesn't exist), then fully quit and reopen Claude Desktop:
+Every MCP host that launches a local stdio server wants the same three things — a `command`, its `args`, and an `env` block:
 
 ```json
 {
-  "mcpServers": {
-    "learnstack": {
-      "command": "C:/Projects/learn-stack/.venv/Scripts/python.exe",
-      "args": ["-m", "app.mcp_server"],
-      "env": {
-        "DATABASE_URL": "<NEON_URL>",
-        "OPENAI_API_KEY": "<OPENAI_KEY>",
-        "PYTHONPATH": "C:/Projects/learn-stack"
-      }
-    }
+  "command": "C:/Projects/learn-stack/.venv/Scripts/python.exe",
+  "args": ["C:/Projects/learn-stack/app/mcp_server.py"],
+  "env": {
+    "DATABASE_URL": "<your Postgres connection string>",
+    "OPENAI_API_KEY": "<your OpenAI key>",
+    "PYTHONPATH": "C:/Projects/learn-stack"
   }
 }
 ```
 
-Use the same Neon string you gave Render (scheme `postgresql+asyncpg://…`, keep the `?sslmode=…&channel_binding=…` params — the app strips them at runtime). `PYTHONPATH` lets `-m app.mcp_server` import the `app` package regardless of the host's working directory.
+- **`DATABASE_URL`** — which database the server writes to. The server connects to whatever `DATABASE_URL` is set in *its own* process environment. Because `app/database.py` calls `load_dotenv(override=False)`, a value set here **wins over the repo `.env`** — so the MCP server can target Neon while your local web app and tests keep using the Docker `.env`. **Do not** point the repo `.env` at Neon (that would send local dev and `pytest` to production); set Neon only in the host's env block for this server.
+- **`OPENAI_API_KEY`** — only needed for `search_notes` (embedding the query); `create_note` doesn't embed.
+- **`PYTHONPATH`** — lets `app/mcp_server.py` import the `app` package regardless of the host's own working directory.
 
-Then, from the host, ask it to capture a note — e.g. *"save a LearnStack note about the Neon SSL gotcha"*. It calls `create_note`, which stages the note; review and approve it in the **Pending** tab of the app instance pointed at the same database (the deployed Render app for Neon, or a local app run with `DATABASE_URL=<Neon>`).
+Where this JSON goes, and how it's supplied, is host-specific — for a tool other than Claude Code, consult that tool's own MCP configuration docs.
+
+> **Prerequisite for `create_note` against Neon:** the `pending_notes` table must exist in Neon. It is created by the startup migration (`alembic upgrade head`) on the next Render deploy after this phase merges to `main`. `search_notes` works against Neon immediately (the `notes` table already exists).
+
+#### Claude Code (tested)
+
+Claude Code's CLI, VS Code extension, and the Claude Code shell inside the Desktop app all read one shared config file (`~/.claude.json`). Register once, at **user scope** (`-s user`/`--scope user`), not the CLI's local (per-project) default, so all three resolve to the exact same entry — nothing to keep in sync per project. Trade-off: `learnstack`'s tools become available in *every* project you open, not just this one — fine for a personal notes server, worth knowing.
+
+```powershell
+claude mcp add learnstack --scope user -- C:/Projects/learn-stack/.venv/Scripts/python.exe C:/Projects/learn-stack/app/mcp_server.py
+```
+
+> `claude mcp add-json` is broken in current Claude Code CLI releases — it rejects even trivially valid JSON with a generic `Invalid input` error. The flag-based `claude mcp add … -e KEY=value -- …` form has its own bug: combining `-e` with `--`, or passing any dash-prefixed argument after `--`, loses the required command entirely (this is why the command above points directly at `app/mcp_server.py` instead of `python -m app.mcp_server` — the script has its own `if __name__ == "__main__"` entry point, so no `-m` flag is needed at all). Neither bug is scope-specific — both still apply with `--scope user`.
+
+The command above creates the entry with an empty `"env": {}`. Fill it in with a temp script rather than typing the values at the interactive prompt (PowerShell's `PSReadLine` persists typed/pasted commands to a plaintext history file forever, so pasting secrets there leaves a permanent copy):
+
+```powershell
+$path = "$HOME\.claude.json"
+$content = [System.IO.File]::ReadAllText($path)
+$newEnv = '"env": {"DATABASE_URL": "<NEON_URL>", "OPENAI_API_KEY": "<OPENAI_KEY>", "PYTHONPATH": "C:/Projects/learn-stack"}'
+$content = $content.Replace('"env": {}', $newEnv)
+[System.IO.File]::WriteAllText($path, $content, [System.Text.UTF8Encoding]::new($false))
+```
+
+> `.Replace('"env": {}', ...)` replaces **every** match in the file, not just this one — check the diff before saving if `~/.claude.json` might have other empty `"env": {}` placeholders at the time you run it.
+
+Verify with `claude mcp list` — `learnstack` should show as Connected regardless of which project you run it from. Note the config is read at session **startup**; a Claude Code session already running before you register the server won't see it until restarted.
+
+Then, from any of the three surfaces, ask it to capture a note — e.g. *"save a LearnStack note about the Neon SSL gotcha"*. It calls `create_note`, which stages the note; review and approve it in the **Pending** tab of the app instance pointed at the same database (the deployed Render app for Neon, or a local app run with `DATABASE_URL=<Neon>`).
 
 - The server is a **subprocess of the host**: it starts when the host connects and shuts down when you exit — nothing keeps listening afterward.
 - stdio uses **stdout** for the JSON-RPC protocol, so the server logs to **stderr**.
 - Neon autosuspends on idle, so the first tool call after a quiet period is slow (~1–3s wake); `pool_pre_ping` keeps it from erroring on a dropped connection.
+
+**Not covered here:** claude.ai's web and mobile chat apps — and Claude Desktop's own "Connectors" settings, distinct from its Claude Code shell above — can't reach a local subprocess at all; they only connect to remote MCP servers over HTTPS with OAuth. That's a separate, not-yet-built phase (see `CLAUDE.md` → **Authentication + remote MCP**).
 
 ---
 
