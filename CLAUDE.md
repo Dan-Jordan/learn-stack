@@ -43,19 +43,17 @@ When working on Phase 1–3, keep the RAG architecture in mind even when not bui
 
 ## Current phase
 
-**Phase 15 — Code complete ✓ · MCP host wiring pending**
+**Phase 15 — Complete ✓**
 
-Phase 15 stands up a local (stdio) MCP server that exposes LearnStack's notes tools — `search_notes` (read) and `create_note` (staged write) — over the Model Context Protocol, so any MCP host (Claude Code, Claude Desktop) can search and capture notes into the **Neon** system-of-record database. `create_note` stages to a new `pending_notes` table; the note is reviewed, edited, and approved in a new "Pending" tab in the web UI, and only then embedded and promoted into `notes`. Built read-first (`search_notes`) to stand up the whole server with zero write risk, then the gated write path.
+Phase 15 stands up a local (stdio) MCP server that exposes LearnStack's notes tools — `search_notes` (read) and `create_note` (staged write) — over the Model Context Protocol, so any Claude Code surface (CLI, VS Code extension, or the Claude Code shell inside Desktop) can search and capture notes into the **Neon** system-of-record database. `create_note` stages to a new `pending_notes` table; the note is reviewed, edited, and approved in a new "Pending" tab in the web UI, and only then embedded and promoted into `notes`. Built read-first (`search_notes`) to stand up the whole server with zero write risk, then the gated write path.
 
-**All code and tests are done (48 passing) and merge-ready.** What remains is *operational*, not code — this is the first thing to pick up in the next session (see **Phase 15 → Next steps: MCP host wiring** below):
-1. **Merge this branch to `main`** so the startup migration (`alembic upgrade head`) creates the `pending_notes` table in Neon. Until then, `create_note` → Neon fails with *"relation pending_notes does not exist"*.
-2. **Register the MCP server in each host** (Claude Code CLI + VS Code, Claude Desktop) with `DATABASE_URL=<Neon>` in the server's env block, so captures land in the system-of-record DB while local dev/tests stay on Docker.
+**Code, merge, and host wiring are all done.** The branch merged to `main` (Render's startup migration created `pending_notes` in Neon — confirmed via `GET /pending` returning `200 []` on the live app), and the MCP server is registered with Claude Code at **user scope** in `~/.claude.json` — one entry, pointed at Neon's `DATABASE_URL`, that covers the CLI, the VS Code extension, and the Claude Code shell inside the Desktop app simultaneously (confirmed working across all three). See **Phase 15 → MCP host wiring** below for the working registration sequence, and for what's deliberately *not* covered by this phase (claude.ai's web/mobile chat apps, which need a remote server — a separate future phase).
 
 Phase 14 (Neon database migration) is complete — production Postgres now lives on Neon, with the web service still on Render. See the Phase 14 section below.
 
 **Future phases are unnumbered.** Completed phases keep their numbers as a historical record; upcoming work is listed in order *without* numbers, so phases can be reordered or inserted without renumbering everything downstream. The future phases below are in intended order.
 
-**Future phase — Authentication + remote MCP (next up after Phase 15).** HTTP Basic Auth gates all routes so the app can be shared without being fully public, and the MCP server is exposed remotely (over HTTP, with auth) rather than only over local stdio. Bundled because standing up a public write endpoint is exactly when the app should stop being unauthenticated; may split if the remote-MCP auth (OAuth) proves heavy. No standalone section yet — a full plan will be written when it comes up.
+**Future phase — Authentication + remote MCP (next up).** HTTP Basic Auth gates all routes so the app can be shared without being fully public, and the MCP server is exposed remotely (over HTTP, with auth) rather than only over local stdio. Bundled because standing up a public write endpoint is exactly when the app should stop being unauthenticated; may split if the remote-MCP auth (OAuth) proves heavy. No standalone section yet — a full plan will be written when it comes up.
 
 **Future phase — Insights.** A scheduled clustering pipeline over note embeddings. See the Insights section below.
 
@@ -227,9 +225,9 @@ Verified: locally against live Neon before deploy — connecting through `app.da
 
 ---
 
-## Phase 15 — Code complete ✓ · MCP host wiring pending
+## Phase 15 — Complete ✓
 
-**Goal:** A local (stdio) MCP server exposes LearnStack's notes tools — `search_notes` (read) and `create_note` (staged write) — over the Model Context Protocol, so any MCP host (Claude Code, Claude Desktop) can search and capture notes that land in the **Neon** system-of-record database. `create_note` stages to a new `pending_notes` table; the note is reviewed, edited, and approved in a new "Pending" tab in the web UI, and only then embedded and promoted into the `notes` table. Done when: from Claude Code, "create a note about X" stages a pending note in Neon, and approving it in the Pending tab produces a `notes` row identical to one created any other way.
+**Goal:** A local (stdio) MCP server exposes LearnStack's notes tools — `search_notes` (read) and `create_note` (staged write) — over the Model Context Protocol, so any Claude Code surface (CLI, VS Code extension, or the Claude Code shell inside Desktop) can search and capture notes that land in the **Neon** system-of-record database. `create_note` stages to a new `pending_notes` table; the note is reviewed, edited, and approved in a new "Pending" tab in the web UI, and only then embedded and promoted into the `notes` table. Done when: from Claude Code, "create a note about X" stages a pending note in Neon, and approving it in the Pending tab produces a `notes` row identical to one created any other way.
 
 **Why:** Two things at once. (1) It builds the **provider side** of the agent/tool pattern — Phase 11 built the *host* side (the `/chat` loop that decides which tool to call); this exposes tools *over the protocol* so any host can use them. That's a distinct, marketable skill (MCP is the default integration layer across the industry), and having both sides demonstrates the whole pattern. (2) It fixes a real, felt sync problem: notes captured from Claude Code currently reach only **local** Docker via `import_notes.py`, so Neon — what the deployed app reads — drifts. With Neon as the system of record and the MCP `create_note` pointed at `DATABASE_URL` (= Neon), capturing from Claude Code lands the note in production, behind a review gate. The staged-write gate applies the "nothing writes to the system of record without a checkpoint" instinct to an agentic interface — a data-governance pattern, not just a wired-up function call.
 
@@ -250,7 +248,7 @@ The gate (steps 2–3) does not have to be built in lockstep with the `create_no
 - [x] `static/index.html` — new "Pending" tab: lists staged notes as inline-editable cards; Approve persists edits (`PUT`) then promotes (`POST …/approve`); Reject deletes behind a `confirm()`. Lazy-loads on first open with a Refresh button.
 - [x] `tests/` — `test_mcp.py` (6: tool discovery + dispatch, mock crud); `test_pending.py` (8: CRUD + endpoints incl. approve-promotes-and-embeds, embedding covered by the autouse `mock_embeddings` fixture). `conftest.py` gains a shared `engine` fixture + a `db_session` fixture to seed pending rows (no HTTP create path).
 
-Verified: full suite green — **48 passed** (14 new: 8 pending + 6 MCP). Approve flow smoke-tested end-to-end against the live app: `PUT` edit → `POST …/approve` promotes with the edit, note lands in `notes` (embedded), pending queue empties. The MCP server boots cleanly (`python -m app.mcp_server`) and stages `create_note` into `pending_notes`.
+Verified: full suite green — **48 passed** (14 new: 8 pending + 6 MCP). Approve flow smoke-tested end-to-end against the live app: `PUT` edit → `POST …/approve` promotes with the edit, note lands in `notes` (embedded), pending queue empties. The MCP server boots cleanly (`python -m app.mcp_server`) and stages `create_note` into `pending_notes`. Post-merge, the live Render app's `GET /pending` returns `200 []`, confirming the startup migration created `pending_notes` in Neon. The MCP server is registered with Claude Code at **user scope** — one entry in `~/.claude.json` covers the CLI, the VS Code extension, and the Desktop app's Claude Code shell — env pointed at Neon's `DATABASE_URL`. See **MCP host wiring** below for the registration sequence.
 
 **Design decisions:**
 - **One phase, internally sequenced read → write → review**, gate present before merge — keeps concepts unmixed while never shipping an ungated write to the system of record.
@@ -269,6 +267,7 @@ Verified: full suite green — **48 passed** (14 new: 8 pending + 6 MCP). Approv
 - **MCP `create_note`'s behavior sentence is per-surface; the quality policy rides on the tool description.** `/chat` says "proposes an unsaved draft"; MCP says "stages a pending row" — genuinely different persistence, so the sentence is assembled at each consumer. Because an MCP server can't set the host's system prompt, `NOTE_QUALITY_GUIDANCE` rides on MCP's tool *description* (weaker steering than `/chat`'s system prompt — an accepted limitation).
 - **Pending-tab Approve does `PUT`-then-approve; card field values are set as DOM properties, not HTML attributes.** Approve persists the card's current field values before promoting, so inline edits aren't lost (approval promotes what's in the DB). Field values are assigned via `.value` (not interpolated into an `innerHTML` `value="…"`) so Markdown content with quotes/backticks can't break the markup.
 - **conftest: shared `engine` fixture + a `db_session` fixture.** Pending notes have no HTTP create path, so endpoint tests seed rows directly via `db_session` on the *same* engine the client uses (committed rows are visible to requests). The `client` fixture's behavior is unchanged — the split is purely additive.
+- **Registered with Claude Code at user scope (`--scope user`), not the CLI's local-scope default.** Local scope nests a server's config under a key computed from the literal project working-directory string — case-sensitive, despite Windows paths being merely case-*preserving*, and computed inconsistently between the bare CLI and a VS Code-hosted session (confirmed: the two could resolve to different keys from the same repo). User scope stores the `learnstack` entry once, at the top level of `~/.claude.json` (a sibling of `"projects"`, not nested under any path), so the CLI, the VS Code extension, and the Claude Code shell inside the Desktop app all resolve to the exact same entry — no per-project keying left to disagree. Trade-off accepted: the server's tools are available in every Claude Code session for this user account, not scoped to just this repo — fine for a personal notes server.
 
 **Risks / gotchas:**
 - **No ungated write to Neon may ship** — the gate must be in place before merge, because merge auto-deploys and points the live `create_note` at Neon. (The gate — staged writes + Pending tab — is now complete.)
@@ -276,19 +275,34 @@ Verified: full suite green — **48 passed** (14 new: 8 pending + 6 MCP). Approv
 - **The local stdio server does not change the public-exposure posture** — it's private by construction. Do **not** expose the MCP server over HTTP in this phase; remote exposure + auth is the next phase, deliberately paired with locking the app down.
 - **MCP hosts can't be given a system prompt by the server** — note-quality steering is weaker than inside `/chat`; mitigated by putting `NOTE_QUALITY_GUIDANCE` on the tool description.
 - **`notes-inbox/` + `import_notes.py` become a divergent legacy review path** (writes to *local*, while the real gate now targets Neon) — flagged in Follow-ups; decide retire-vs-repoint after this phase lands, not before.
+- **`claude mcp add-json` is broken in Claude Code CLI 2.1.152** — it rejects even trivially valid JSON (e.g. `{"command":"python"}`) with a generic `Invalid configuration: : Invalid input`, regardless of payload content or quoting style. A known upstream bug, not a project-specific mistake — re-check on CLI upgrade in case it's fixed.
+- **`claude mcp add`'s flag form breaks on *any* dash-prefixed token after `--`**, not just `-m` as originally documented. Commander's argument parser loses the required positional `commandOrUrl` entirely if `-e KEY=value` is combined with `--`, or if any subprocess arg after `--` starts with `-` (confirmed with `--version`, `-m`, `-File`). The only combination that reliably works is `claude mcp add <name> -- <bare command> <bare args>` with **zero** dashes anywhere after `--` and **no** `-e` flags at all.
 
-**Next steps: MCP host wiring (start here next session).** All code is done; this is the operational finish. The mechanism: `app/database.py` calls `load_dotenv(override=False)`, so a `DATABASE_URL` set in the MCP server's *process env* **wins over the repo `.env`** — the server hits Neon while the local web app and `pytest` keep using the Docker `.env`. **Do not repoint the repo `.env` at Neon** (that would send local dev and tests to production) and **do not set `DATABASE_URL=Neon` as a global OS env var** (same reason — it would leak into the local app). Set Neon *only* in each host's per-server env block.
+**MCP host wiring — complete.** The mechanism: `app/database.py` calls `load_dotenv(override=False)`, so a `DATABASE_URL` set in the MCP server's *process env* **wins over the repo `.env`** — the server hits Neon while the local web app and `pytest` keep using the Docker `.env`. **Do not repoint the repo `.env` at Neon** (that would send local dev and tests to production) and **do not set `DATABASE_URL=Neon` as a global OS env var** (same reason — it would leak into the local app). Set Neon *only* in the server's env block in `~/.claude.json`.
 
-1. **Merge to `main` first.** Render's startup `alembic upgrade head` creates `pending_notes` in Neon. `create_note` → Neon fails until this runs; `search_notes` → Neon works before it (the `notes` table already exists).
-2. **Claude Code (VS Code CLI + chat share one config).** From the repo root, at **local** scope (stored in `~/.claude.json`, not committed). Use `add-json` — the plain `add … -- python -m app.mcp_server` form breaks the parser on `-m` (a real, previously-hit gotcha):
+1. ~~Merge to `main`~~ — done; `GET /pending` on the live Render app returns `200 []`, confirming `pending_notes` exists in Neon.
+2. ~~Register with Claude Code~~ — done, at **user scope**, which covers the CLI, the VS Code extension, and the Claude Code shell inside the Desktop app from one entry (confirmed connected from all three). The working sequence:
    ```powershell
-   claude mcp add-json learnstack '{"command":"C:/Projects/learn-stack/.venv/Scripts/python.exe","args":["-m","app.mcp_server"],"env":{"DATABASE_URL":"<NEON_URL>","OPENAI_API_KEY":"<OPENAI_KEY>","PYTHONPATH":"C:/Projects/learn-stack"}}'
-   ```
-3. **Claude Desktop.** Add an `mcpServers.learnstack` entry to `%APPDATA%\Claude\claude_desktop_config.json` (same `command`/`args`/`env`), then fully quit and reopen. `PYTHONPATH` lets `-m app.mcp_server` import `app` regardless of the host's working directory (Desktop's cwd isn't the repo).
-4. **`env` contents.** `DATABASE_URL` = the Neon string (scheme `postgresql+asyncpg://…`, keep `?sslmode=…&channel_binding=…` — the app strips them). `OPENAI_API_KEY` is only needed for `search_notes` (embedding the query); `create_note` doesn't embed. `PYTHONPATH` = repo root.
-5. **Verify.** From a host: "save a LearnStack note about X" → `create_note` stages it → review/approve in the **Pending** tab of an app instance pointed at the *same* DB (the deployed Render app for Neon, or a local app run with `DATABASE_URL=<Neon>`). Note: a note staged into Neon will **not** appear in your local-Docker Pending tab — that's by design.
+   # 1. Register the bare command at user scope — no -e, no dashes after --, or the parser breaks:
+   claude mcp add learnstack --scope user -- C:/Projects/learn-stack/.venv/Scripts/python.exe C:/Projects/learn-stack/app/mcp_server.py
+   # (this creates the entry with an empty "env": {} placeholder, at the top level of ~/.claude.json —
+   #  a sibling of "projects", not nested under any project path)
 
-Full user-facing setup instructions live in `README.md` → **MCP server (Claude Code + Claude Desktop)**.
+   # 2. Fill the env block via a temp .ps1 (keeps secrets out of PSReadLine's persisted
+   #    interactive-command history — typing/pasting them at the prompt directly does not):
+   $path = "$HOME\.claude.json"
+   $content = [System.IO.File]::ReadAllText($path)
+   $newEnv = '"env": {"DATABASE_URL": "<NEON_URL>", "OPENAI_API_KEY": "<OPENAI_KEY>", "PYTHONPATH": "C:/Projects/learn-stack"}'
+   $content = $content.Replace('"env": {}', $newEnv)
+   [System.IO.File]::WriteAllText($path, $content, [System.Text.UTF8Encoding]::new($false))
+   ```
+   `python -m app.mcp_server` is deliberately not used — pointing at the script path directly (`app/mcp_server.py` has an `if __name__ == "__main__":` entry point) avoids the `-m` flag and its parser bug entirely. `PYTHONPATH` still matters so `app.*` imports resolve regardless of the host's own cwd. `.Replace('"env": {}', ...)` replaces every match in the file, not just the one you want — check the diff before saving.
+3. **`env` contents.** `DATABASE_URL` = the Neon string (scheme `postgresql+asyncpg://…`, keep `?sslmode=…&channel_binding=…` — the app strips them). `OPENAI_API_KEY` is only needed for `search_notes` (embedding the query); `create_note` doesn't embed. `PYTHONPATH` = repo root.
+4. **Verify.** From any of the three surfaces above: "save a LearnStack note about X" → `create_note` stages it → review/approve in the **Pending** tab of an app instance pointed at the *same* DB (the deployed Render app for Neon, or a local app run with `DATABASE_URL=<Neon>`). Note: a note staged into Neon will **not** appear in your local-Docker Pending tab — that's by design. Also note the MCP connection is picked up at Claude Code session **startup** — a session already running before registration won't see the new tools until restarted.
+
+**Out of scope for this phase:** claude.ai's web and mobile chat apps — and Claude Desktop's own "Connectors" settings, distinct from its Claude Code shell above — can't reach a local subprocess at all; they only connect to remote MCP servers over HTTPS with OAuth. That's the separate, not-yet-built **Authentication + remote MCP** phase, confirmed (via Anthropic's docs) to cover claude.ai web, Claude Desktop, and the mobile apps from one registration once built — not a gap in this phase.
+
+Full user-facing setup instructions live in `README.md` → **MCP server**.
 
 ---
 
@@ -798,6 +812,7 @@ Decisions made during development that future work should respect.
 | Phase 15 | Pending-tab Approve does `PUT`-then-approve; card values set as DOM properties, not attributes | Persisting the card's fields before promoting keeps inline edits (approval promotes what's in the DB). Assigning `.value` (vs an `innerHTML` `value="…"`) avoids Markdown quotes/backticks breaking the markup |
 | Phase 15 | conftest: shared `engine` fixture + `db_session`, for seeding rows with no HTTP create path | Pending notes are staged only via MCP, so endpoint tests seed directly via `db_session` on the same engine `client` uses (committed rows visible to requests). `client`'s behavior is unchanged — additive split |
 | Phase 15 | MCP write target = `DATABASE_URL` in the host's per-server env (no code change); never repoint local `.env`/global env | `load_dotenv(override=False)` makes the process env win over `.env`, so the host launches the server with `DATABASE_URL=Neon` while local dev/tests keep the Docker `.env`. A global OS env var or a repointed `.env` would leak Neon into the local app/tests — so scope it to the server's env block only |
+| Phase 15 | Registered Claude Code with `claude mcp add <name> --scope user -- <direct script path>` (no `-m`, no `-e`, no `add-json`), env injected via a targeted string-replace on `~/.claude.json` | `add-json` rejects all input in CLI 2.1.152 (upstream bug); the flag form's `-e`/`--` handling breaks on any dash-prefixed arg. Since `app/mcp_server.py` is directly runnable (has `if __name__ == "__main__"`), pointing at the file avoids `-m` entirely, leaving zero dashes for the parser to trip on. **User scope**, not the CLI's local-scope default, stores the entry once at the top level of `~/.claude.json` (a sibling of `"projects"`), so the CLI, the VS Code extension, and the Claude Code shell inside Desktop all resolve to the same entry with no per-project keying to disagree about |
 
 ---
 
@@ -896,14 +911,17 @@ filled-in example. Best when you're heads-down in the terminal and don't want
 to context-switch to a browser. Writes to whatever DB the running API targets
 (local Docker in dev) — see the Follow-up on this becoming a divergent path.
 
-**MCP path (any MCP host — Phase 15):** Tell Claude Code / Claude Desktop to
-capture a note; the MCP `create_note` tool *stages* it into `pending_notes`
-(no embedding yet). You then review, edit, and approve it in the web UI's
-**Pending** tab, which promotes it into `notes` (embedding the final text).
-Pointed at `DATABASE_URL=<Neon>`, this is the path that lands notes in the
-system-of-record DB behind a human review gate. Requires the MCP host wiring
-(see Phase 15 → Next steps). Note: `notes-inbox/` writes to *local* Docker,
-while this path targets Neon — they are not the same database.
+**MCP path (Claude Code — Phase 15, wired):** Tell any Claude Code surface
+(CLI, VS Code extension, or the Claude Code shell inside Desktop — one
+registration covers all three) to capture a note; the MCP `create_note` tool
+*stages* it into `pending_notes` (no embedding yet). You then review, edit,
+and approve it in the web UI's **Pending** tab, which promotes it into
+`notes` (embedding the final text). Pointed at `DATABASE_URL=<Neon>`, this is
+the path that lands notes in the system-of-record DB behind a human review
+gate. See Phase 15 → **MCP host wiring** for the registration sequence. Note:
+`notes-inbox/` writes to *local* Docker, while this path targets Neon — they
+are not the same database. (claude.ai's web/mobile chat apps are a separate,
+not-yet-built remote-MCP phase — this path doesn't reach them.)
 
 **To import inbox notes:** once the API is running, `python import_notes.py`
 posts all `notes-inbox/*.md` files to `POST /notes` and moves them to
