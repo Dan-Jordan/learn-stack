@@ -43,17 +43,15 @@ When working on Phase 1–3, keep the RAG architecture in mind even when not bui
 
 ## Current phase
 
-**Phase 15 — Complete ✓**
+**Phase 16 — Complete ✓**
 
-Phase 15 stands up a local (stdio) MCP server that exposes LearnStack's notes tools — `search_notes` (read) and `create_note` (staged write) — over the Model Context Protocol, so any Claude Code surface (CLI, VS Code extension, or the Claude Code shell inside Desktop) can search and capture notes into the **Neon** system-of-record database. `create_note` stages to a new `pending_notes` table; the note is reviewed, edited, and approved in a new "Pending" tab in the web UI, and only then embedded and promoted into `notes`. Built read-first (`search_notes`) to stand up the whole server with zero write risk, then the gated write path.
+Phase 16 gates every route in the deployed app behind HTTP Basic Auth — a single hardcoded username/password pair via `BASIC_AUTH_USERNAME`/`BASIC_AUTH_PASSWORD` env vars — so the app can be shared without being fully public. Every route is gated except `GET /health` (Render's health check can't supply credentials); `/docs`, `/redoc`, and `/openapi.json` are gated too (disabled by default, re-added behind auth) so the API schema itself isn't publicly browsable. The web UI needs no JS changes — the browser's native Basic Auth prompt handles it. This was split off from what CLAUDE.md originally planned as one bundled "Authentication + remote MCP" phase — see the Phase 16 section below for the split rationale.
 
-**Code, merge, and host wiring are all done.** The branch merged to `main` (Render's startup migration created `pending_notes` in Neon — confirmed via `GET /pending` returning `200 []` on the live app), and the MCP server is registered with Claude Code at **user scope** in `~/.claude.json` — one entry, pointed at Neon's `DATABASE_URL`, that covers the CLI, the VS Code extension, and the Claude Code shell inside the Desktop app simultaneously (confirmed working across all three). See **Phase 15 → MCP host wiring** below for the working registration sequence, and for what's deliberately *not* covered by this phase (claude.ai's web/mobile chat apps, which need a remote server — a separate future phase).
-
-Phase 14 (Neon database migration) is complete — production Postgres now lives on Neon, with the web service still on Render. See the Phase 14 section below.
+Phase 15 (local stdio MCP server) is complete — see the Phase 15 section below. Phase 14 (Neon database migration) is complete — production Postgres now lives on Neon, with the web service still on Render. See the Phase 14 section below.
 
 **Future phases are unnumbered.** Completed phases keep their numbers as a historical record; upcoming work is listed in order *without* numbers, so phases can be reordered or inserted without renumbering everything downstream. The future phases below are in intended order.
 
-**Future phase — Authentication + remote MCP (next up).** HTTP Basic Auth gates all routes so the app can be shared without being fully public, and the MCP server is exposed remotely (over HTTP, with auth) rather than only over local stdio. Bundled because standing up a public write endpoint is exactly when the app should stop being unauthenticated; may split if the remote-MCP auth (OAuth) proves heavy. No standalone section yet — a full plan will be written when it comes up.
+**Future phase — Remote MCP (next up).** The MCP server (Phase 15's stdio path) is exposed remotely over HTTP with OAuth 2.1 + PKCE, so claude.ai's web/mobile chat apps and Claude Desktop's own Connectors (not just Claude Code) can reach it. Originally bundled with HTTP Basic Auth as one "Authentication + remote MCP" phase; split out (Phase 16) once research showed the OAuth/remote-transport half is a substantially larger, separate build — the `mcp` SDK ships a complete OAuth 2.1 authorization server (PKCE, Dynamic Client Registration all built in), but the storage backend (an `OAuthAuthorizationServerProvider` implementation over new DB tables for clients/auth-codes/tokens) plus Streamable HTTP transport wiring still has to be hand-built. Client registration will use a **static Client ID/Secret**, not Dynamic Client Registration — confirmed during Phase 16's planning: this is a single personal user with exactly one client that will ever connect (all of claude.ai's surfaces share one registration server-side). No standalone section yet — a full plan will be written when it comes up.
 
 **Future phase — Insights.** A scheduled clustering pipeline over note embeddings. See the Insights section below.
 
@@ -74,7 +72,8 @@ Phase 14 (Neon database migration) is complete — production Postgres now lives
 | 13 | Logging | Leveled logging across the app's boundaries and error paths; `LOG_LEVEL`-configurable and observable on Render |
 | 14 | Neon database migration | Production Postgres moved from Render's expiring free tier to Neon; web service stays on Render |
 | 15 | MCP server | Local stdio MCP server exposes `search_notes` + `create_note` (staged via `pending_notes`, reviewed in a "Pending" tab); notes land in Neon |
-| — | Authentication + remote MCP | HTTP Basic Auth gates all routes (env-var credentials); the MCP server is exposed remotely with auth |
+| 16 | HTTP Basic Auth | Every route except `/health` requires HTTP Basic Auth (env-var credentials); fails closed if unset |
+| — | Remote MCP | The MCP server is exposed remotely over HTTP with OAuth 2.1 + PKCE, reachable from claude.ai web/mobile/Desktop Connectors |
 | — | Insights | A scheduled job clusters note embeddings into topics and labels them; `/insights` shows the results |
 
 **Embedding model:** OpenAI text-embedding API (industry standard, fractions of a cent per note for personal use).
@@ -300,9 +299,43 @@ Verified: full suite green — **48 passed** (14 new: 8 pending + 6 MCP). Approv
 3. **`env` contents.** `DATABASE_URL` = the Neon string (scheme `postgresql+asyncpg://…`, keep `?sslmode=…&channel_binding=…` — the app strips them). `OPENAI_API_KEY` is only needed for `search_notes` (embedding the query); `create_note` doesn't embed. `PYTHONPATH` = repo root.
 4. **Verify.** From any of the three surfaces above: "save a LearnStack note about X" → `create_note` stages it → review/approve in the **Pending** tab of an app instance pointed at the *same* DB (the deployed Render app for Neon, or a local app run with `DATABASE_URL=<Neon>`). Note: a note staged into Neon will **not** appear in your local-Docker Pending tab — that's by design. Also note the MCP connection is picked up at Claude Code session **startup** — a session already running before registration won't see the new tools until restarted.
 
-**Out of scope for this phase:** claude.ai's web and mobile chat apps — and Claude Desktop's own "Connectors" settings, distinct from its Claude Code shell above — can't reach a local subprocess at all; they only connect to remote MCP servers over HTTPS with OAuth. That's the separate, not-yet-built **Authentication + remote MCP** phase, confirmed (via Anthropic's docs) to cover claude.ai web, Claude Desktop, and the mobile apps from one registration once built — not a gap in this phase.
+**Out of scope for this phase:** claude.ai's web and mobile chat apps — and Claude Desktop's own "Connectors" settings, distinct from its Claude Code shell above — can't reach a local subprocess at all; they only connect to remote MCP servers over HTTPS with OAuth. That's the separate, not-yet-built **Remote MCP** phase, confirmed (via Anthropic's docs) to cover claude.ai web, Claude Desktop, and the mobile apps from one registration once built — not a gap in this phase.
 
 Full user-facing setup instructions live in `README.md` → **MCP server**.
+
+---
+
+## Phase 16 — Complete ✓
+
+**Goal:** Every route in the deployed app — except `GET /health` — requires HTTP Basic Auth: a single hardcoded username/password pair, checked against `BASIC_AUTH_USERNAME`/`BASIC_AUTH_PASSWORD` env vars. Done when: hitting any gated route without credentials (or with wrong ones) returns 401 with a `WWW-Authenticate: Basic` challenge, and the browser's native Basic Auth prompt gates the web UI end-to-end with zero JS changes.
+
+**Why:** Phase 15 stood up a write path (MCP `create_note`) into the system-of-record database, behind a review gate but with zero authentication on the deployed app itself — anyone with the Render URL could browse or mutate every note. CLAUDE.md's next planned phase originally bundled this with exposing the MCP server remotely (over HTTP with OAuth), since standing up a public write endpoint is exactly when the app should stop being unauthenticated. Research done at the start of this phase found the OAuth/remote-MCP half is a substantial, self-contained build — the `mcp` SDK (v1.28.1, confirmed installed) ships a complete OAuth 2.1 authorization server (`create_auth_routes()`, PKCE, Dynamic Client Registration all built in), but the storage backend (a `OAuthAuthorizationServerProvider` implementation over new DB tables for clients/auth-codes/tokens) plus Streamable HTTP transport wiring still has to be hand-built — a different concern from gating existing routes. Per CLAUDE.md's explicit allowance to split if the OAuth half proved heavy, and the project's own one-phase-one-concern convention (cited for Phase 14's SSL fix vs. KMeans), this phase was split to cover Basic Auth only; Remote MCP + OAuth is now a separate future phase (see **Current phase** above), with the SDK research preserved in a note ("What claude.ai's custom connectors actually require of a remote MCP server," promoted into `notes`) for that future planning pass.
+
+**Built:**
+- [x] `app/auth.py` (new) — `get_current_user()`, a `HTTPBasic`-backed dependency comparing submitted credentials against `BASIC_AUTH_USERNAME`/`BASIC_AUTH_PASSWORD` via `secrets.compare_digest` (timing-safe). Unset env vars compare against empty strings, so an unconfigured deploy fails **closed** (locked out), not open. Failed attempts are logged at WARNING — message only, never the submitted username/password (the never-log-values rule).
+- [x] `app/main.py` — the dependency is applied at `app.include_router(..., dependencies=[Depends(get_current_user)])` for every router except `health.router`, mirroring the existing per-router registration style with no per-endpoint edits. The `/` UI route is gated directly. FastAPI's default `/docs`, `/redoc`, `/openapi.json` are disabled (`docs_url=None` etc.) and re-added as three thin gated routes using `fastapi.openapi.docs`/`fastapi.openapi.utils` helpers — router-level `dependencies=` doesn't cover FastAPI's built-in doc routes, and leaving the schema publicly browsable would be inconsistent with "not fully public." The `/static` mount (only `index.html`, unreferenced by the app itself) is left as-is — not worth touching in an auth-focused change.
+- [x] `tests/conftest.py` — the `client` fixture gains an `override_get_current_user` alongside the existing `override_get_db`, so none of the existing 48 tests needed auth headers added.
+- [x] `tests/test_auth.py` (new) — 6 tests using a separate fixture that does *not* override `get_current_user` (reuses the shared `engine` fixture, sets `BASIC_AUTH_USERNAME`/`PASSWORD` via `monkeypatch`): no credentials → 401 w/ `WWW-Authenticate` header; wrong credentials → 401; correct credentials → 200; `/health` → 200 with no credentials; `/docs` and `/openapi.json` → 401 without credentials, 200 with.
+- [x] `render.yaml` — `BASIC_AUTH_USERNAME`/`BASIC_AUTH_PASSWORD` added as `sync: false` dashboard secrets, matching `DATABASE_URL` etc.
+- [x] `.env.example` — both vars added with placeholder values and a comment.
+- [x] `README.md` — new **Authentication** section (credentials, fail-closed behavior, browser-native UX, what's unaffected); phases table updated; MCP section's remote-MCP pointer updated to the renamed **Remote MCP** future phase.
+
+Verified: full suite green — **54 passed** (48 existing + 6 new). Manually verified against a locally running instance with `BASIC_AUTH_USERNAME`/`PASSWORD` set: `GET /notes` with no credentials → 401 + `WWW-Authenticate: Basic`; wrong credentials → 401; correct credentials → 200; `GET /health` → 200 with no credentials; `GET /openapi.json` and `GET /docs` → 401 without credentials, 200 with; `GET /` → 401 without, 200 with.
+
+**Design decisions:**
+- **Router-level `dependencies=[Depends(get_current_user)]` at `include_router()`, not per-endpoint or ASGI middleware** — matches the codebase's existing per-router registration style in `app/main.py` and needed zero edits inside `app/routers/*.py`. A global ASGI middleware would need its own path-based exemption logic for `/health`; the per-router approach gets that exemption for free by simply omitting the dependency on `health.router`.
+- **`/health` is the only route left ungated** — Render's health check can't supply credentials, and it carries no data.
+- **`/docs`, `/redoc`, `/openapi.json` disabled by default and re-added behind auth** — FastAPI's built-in doc routes aren't covered by router-level `dependencies=`, so left alone the full API schema would stay publicly browsable even though actual calls against it would 401. Inconsistent with the phase's "not fully public" goal, so this phase disables the built-ins and re-implements them as three thin gated routes.
+- **Fail closed on unset env vars** — `get_current_user` compares against `os.getenv(..., "")`, so a deploy that forgot to set the Basic Auth secrets locks everyone out rather than leaving every route open. A startup crash or an open app are both worse outcomes than a locked one for a personal app.
+- **`secrets.compare_digest`, not `==`** — the standard, timing-safe comparison recipe for HTTP Basic Auth; avoids a timing side-channel on credential comparison.
+- **Failed auth attempts logged at WARNING, with no values** — a failed login on a wrong-credentials submission is a recoverable oddity per the Phase 13 level convention (like a 0-result search), not an ERROR; the line carries no submitted username or password, consistent with the never-log-values rule. The no-credentials 401 (the browser's initial challenge) is raised by `HTTPBasic` itself before `get_current_user` runs, so only actual wrong-credential submissions are logged — the routine prompt-trigger isn't noise in the logs.
+- **Static Client ID/Secret confirmed for the future Remote MCP phase, not Dynamic Client Registration** — considered and explicitly confirmed during this phase's planning: this is a single personal user with exactly one client that will ever connect (all of claude.ai's surfaces — web, Desktop, Cowork, mobile — share one registration server-side, confirmed via Anthropic's docs), so DCR's value (supporting clients you don't know about in advance) doesn't apply. Recorded here so the decision isn't re-litigated when that phase is planned.
+- **Existing tests need no auth-header changes** — the `client` fixture in `conftest.py` overrides `get_current_user` alongside the existing `get_db` override (identical mechanism already established for `db_session` in Phase 15), so all 48 pre-existing tests pass unmodified. Only `test_auth.py` exercises the real dependency, via its own non-overriding fixture.
+
+**Risks / gotchas:**
+- **Deploy ordering** — `BASIC_AUTH_USERNAME`/`PASSWORD` must be set in Render's dashboard at or before the deploy that ships this code, or the app locks out everyone including its own admin until they're set (fails closed, per the design decision above — the safer failure mode, but still worth flagging as a deploy-time gotcha).
+- **No logout mechanism** — Basic Auth has no server-side session to invalidate; the browser caches credentials until the browser/tab is closed or site data is cleared. Acceptable at personal scale.
+- **Local stdio MCP server is untouched** — `app/mcp_server.py` connects to Postgres directly via `AsyncSessionLocal`, never through FastAPI/HTTP, so this phase has zero effect on it.
 
 ---
 
@@ -546,6 +579,7 @@ learnstack/
 │   ├── assistant.py         # Anthropic client — run_assistant() agent loop for /chat
 │   ├── mcp_server.py        # Local stdio MCP server (low-level mcp.server.Server) — search_notes + create_note (staged)
 │   ├── prompts.py           # Shared tool prose: SEARCH_NOTES_TOOL, CREATE_NOTE_TRIGGER, NOTE_QUALITY_GUIDANCE
+│   ├── auth.py              # get_current_user() — HTTP Basic Auth dependency, gates all routes except /health
 │   ├── models/
 │   │   └── note.py          # Note + PendingNote ORM models, NoteType enum, embedding column
 │   ├── schemas/
@@ -575,7 +609,8 @@ learnstack/
 │   ├── test_draft.py        # 6 tests — notes agent endpoint
 │   ├── test_assistant.py    # 7 tests — notes assistant agent loop
 │   ├── test_pending.py      # 8 tests — pending CRUD + endpoints (approve promotes & embeds)
-│   └── test_mcp.py          # 6 tests — MCP tool discovery + dispatch (search + staged create)
+│   ├── test_mcp.py          # 6 tests — MCP tool discovery + dispatch (search + staged create)
+│   └── test_auth.py         # 6 tests — HTTP Basic Auth: no/wrong/correct creds, /health public, docs gated
 ├── alembic/                 # Migration scripts
 │   ├── env.py
 │   └── versions/
@@ -661,6 +696,8 @@ A separate table holding notes captured via the MCP `create_note` tool, awaiting
 | DELETE | `/pending/{id}` | Reject and discard a staged note |
 | GET | `/health` | Health check — returns `{"status": "ok"}`; used by Render |
 
+Every route above except `GET /health` requires HTTP Basic Auth (Phase 16), as do `/`, `/docs`, `/redoc`, and `/openapi.json`.
+
 Keyword search via query param: `GET /notes?q=dbt`
 
 ---
@@ -683,6 +720,7 @@ Keyword search via query param: `GET /notes?q=dbt`
 | MCP | Model Context Protocol SDK | `mcp>=1.28.0` — local stdio server (`app/mcp_server.py`) on the low-level `mcp.server.Server` |
 | Web UI | Plain HTML + `fetch()` | no framework, no build step (`static/index.html`) |
 | Cloud | Render + Neon | Render runs the web service (`render.yaml`); Neon hosts the Postgres database (`DATABASE_URL` secret) |
+| Auth | HTTP Basic Auth | FastAPI `HTTPBasic`, gates all routes except `/health` (`BASIC_AUTH_USERNAME`/`PASSWORD` secrets) |
 
 ---
 
@@ -813,6 +851,12 @@ Decisions made during development that future work should respect.
 | Phase 15 | conftest: shared `engine` fixture + `db_session`, for seeding rows with no HTTP create path | Pending notes are staged only via MCP, so endpoint tests seed directly via `db_session` on the same engine `client` uses (committed rows visible to requests). `client`'s behavior is unchanged — additive split |
 | Phase 15 | MCP write target = `DATABASE_URL` in the host's per-server env (no code change); never repoint local `.env`/global env | `load_dotenv(override=False)` makes the process env win over `.env`, so the host launches the server with `DATABASE_URL=Neon` while local dev/tests keep the Docker `.env`. A global OS env var or a repointed `.env` would leak Neon into the local app/tests — so scope it to the server's env block only |
 | Phase 15 | Registered Claude Code with `claude mcp add <name> --scope user -- <direct script path>` (no `-m`, no `-e`, no `add-json`), env injected via a targeted string-replace on `~/.claude.json` | `add-json` rejects all input in CLI 2.1.152 (upstream bug); the flag form's `-e`/`--` handling breaks on any dash-prefixed arg. Since `app/mcp_server.py` is directly runnable (has `if __name__ == "__main__"`), pointing at the file avoids `-m` entirely, leaving zero dashes for the parser to trip on. **User scope**, not the CLI's local-scope default, stores the entry once at the top level of `~/.claude.json` (a sibling of `"projects"`), so the CLI, the VS Code extension, and the Claude Code shell inside Desktop all resolve to the same entry with no per-project keying to disagree about |
+| Phase 16 | Split "Authentication + remote MCP" into Basic Auth (this phase) + a separate future Remote MCP phase | Research showed the OAuth/remote-MCP half is a substantial, self-contained build (new DB tables, an `OAuthAuthorizationServerProvider` implementation, Streamable HTTP transport wiring) vs. Basic Auth being a small, self-contained dependency addition — bundling would mix two different concerns into one large PR, against the project's one-phase-one-concern convention |
+| Phase 16 | Router-level `dependencies=[Depends(get_current_user)]` at `include_router()`, not ASGI middleware | Matches the existing per-router registration style in `app/main.py`; `/health`'s exemption falls out for free by omitting the dependency on that one router, rather than needing path-based exclusion logic in a global middleware |
+| Phase 16 | Fail closed on unset `BASIC_AUTH_USERNAME`/`PASSWORD` | `get_current_user` compares against `os.getenv(..., "")`; an unconfigured deploy locks everyone out rather than leaving every route open — the safer failure mode for a personal app |
+| Phase 16 | Disable FastAPI's default `/docs`/`/redoc`/`/openapi.json` and re-add them behind auth | Router-level `dependencies=` doesn't cover FastAPI's built-in doc routes; leaving them open would keep the full API schema publicly browsable even though calls against it 401 — inconsistent with "not fully public" |
+| Phase 16 | Static Client ID/Secret (not Dynamic Client Registration) for the future Remote MCP phase | Confirmed during this phase's planning: a single personal user with exactly one client that will ever connect (all of claude.ai's surfaces share one registration server-side) — DCR's value (supporting clients you don't know about in advance) doesn't apply |
+| Phase 16 | Failed auth attempts logged at WARNING with no values | A wrong-credentials submission is a recoverable oddity (Phase 13 convention), not an ERROR; the log line never carries the submitted username/password. The browser's initial no-credentials challenge is raised by `HTTPBasic` before the dependency body runs, so routine prompt-triggers don't log |
 
 ---
 
@@ -820,7 +864,7 @@ Decisions made during development that future work should respect.
 
 Do not build these until the relevant phase is reached:
 
-- Authentication (future phase — bundled with remote MCP) — HTTP Basic Auth gating all routes; credentials via env vars
+- Remote MCP (OAuth 2.1 + Streamable HTTP transport) — future phase; local stdio MCP (Phase 15) and HTTP Basic Auth (Phase 16) are both done
 - Job postings and application tracking — separate table with dedicated fields; not stored in notes; no target phase
 - URL fetching in the draft agent — paste-only for now; defer to a later phase
 - Multi-user support (not planned)
