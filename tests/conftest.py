@@ -6,6 +6,7 @@ import pytest
 from httpx import AsyncClient, ASGITransport
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from app.main import app
+from app.auth import get_current_user
 from app.database import get_db, Base
 
 TEST_DATABASE_URL = os.getenv(
@@ -79,7 +80,11 @@ async def client(engine):
         async with TestSession() as session:
             yield session
 
+    async def override_get_current_user():
+        return "test-user"
+
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_current_user] = override_get_current_user
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         yield ac

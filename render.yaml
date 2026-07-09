@@ -12,6 +12,10 @@ services:
         sync: false
       - key: ANTHROPIC_API_KEY
         sync: false
+      - key: BASIC_AUTH_USERNAME
+        sync: false
+      - key: BASIC_AUTH_PASSWORD
+        sync: false
       # Not a secret — committed as config-as-code with a sensible default. Change verbosity
       # by editing this value and redeploying (unlike the dashboard-set sync:false vars above).
       - key: LOG_LEVEL

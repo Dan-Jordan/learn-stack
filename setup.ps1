@@ -95,9 +95,11 @@ if (-not (Test-Path ".env")) {
     Write-Host ""
     Write-Host "   .env created from .env.example." -ForegroundColor Yellow
     Write-Host "   ACTION REQUIRED: open .env and fill in these values before continuing:" -ForegroundColor Yellow
-    Write-Host "     OPENAI_API_KEY     - required for embedding pipeline" -ForegroundColor Yellow
-    Write-Host "     ANTHROPIC_API_KEY  - required for /ask and /draft endpoints" -ForegroundColor Yellow
-    Write-Host "     POSTGRES_PASSWORD  - change from default if needed" -ForegroundColor Yellow
+    Write-Host "     OPENAI_API_KEY       - required for embedding pipeline" -ForegroundColor Yellow
+    Write-Host "     ANTHROPIC_API_KEY    - required for /ask and /draft endpoints" -ForegroundColor Yellow
+    Write-Host "     BASIC_AUTH_USERNAME  - required; every route except /health 401s without it" -ForegroundColor Yellow
+    Write-Host "     BASIC_AUTH_PASSWORD  - required; pick any values for local dev" -ForegroundColor Yellow
+    Write-Host "     POSTGRES_PASSWORD    - change from default if needed" -ForegroundColor Yellow
     Write-Host ""
     Write-Host "   Re-run .\setup.ps1 after saving .env." -ForegroundColor Yellow
     exit 0
