@@ -14,11 +14,13 @@ class NoteCreate(BaseModel):
     topic: str | None = None
 
 
-# Shared Anthropic tool input schema for the `create_note` tool, used by both the draft
-# agent (app/agent.py) and the notes assistant (app/assistant.py). Mirrors NoteCreate's
-# writable fields — kept here as the single source of truth for that tool contract so the
-# two callers don't drift. Per-field descriptions live here (they describe the fields);
-# each caller supplies its own top-level tool `description` for when/how to call it.
+# Shared tool input schema for `create_note`, used by app/agent.py (/draft), app/assistant.py
+# (/chat), and app/mcp_server.py (MCP create_note) — one source of truth so the note shape
+# can't drift across those three callers. Kept beside NoteCreate above, not in app/prompts.py
+# with the tool-steering prose, because it mirrors NoteCreate's writable fields — two views of
+# one note shape kept adjacent so they can't drift from the model either. Per-field
+# descriptions live here; each caller supplies its own top-level tool `description` and
+# re-keys this value (`input_schema` for Anthropic, `inputSchema` for MCP's types.Tool).
 NOTE_TOOL_INPUT_SCHEMA = {
     "type": "object",
     "properties": {
@@ -44,10 +46,6 @@ NOTE_TOOL_INPUT_SCHEMA = {
     },
     "required": ["title", "content", "note_type"],
 }
-# Note: the model-steering *prose* for these tools (search_notes definition, the create_note
-# trigger, the note-quality policy) lives in app/prompts.py. NOTE_TOOL_INPUT_SCHEMA stays here
-# because it mirrors NoteCreate above — two views of one note shape, kept adjacent so they
-# can't drift.
 
 
 class NoteUpdate(BaseModel):
