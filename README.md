@@ -193,6 +193,8 @@ Set `BASIC_AUTH_USERNAME` and `BASIC_AUTH_PASSWORD` (a single hardcoded pair —
 
 The web UI needs no code changes: hitting `/` with no credentials triggers the browser's native Basic Auth prompt, and the browser caches credentials for the session for all same-origin requests afterward. There's no logout — closing the browser (or clearing site data) is the only way to drop cached credentials, which is an acceptable trade-off at personal scale.
 
+**Affected and handled:** `import_notes.py` posts to the now-gated `POST /notes`, so it sends the Basic Auth header itself — reading `BASIC_AUTH_USERNAME`/`BASIC_AUTH_PASSWORD` from the same `.env` the local dev server reads, so no extra configuration is needed. Files that fail to import (including on a 401) stay in `notes-inbox/` rather than being moved to `processed/`.
+
 **Not affected:** the local stdio MCP server (`app/mcp_server.py`) connects to Postgres directly, never through FastAPI/HTTP, so it needs no credentials and is untouched by this.
 
 ### MCP server
