@@ -8,12 +8,18 @@ Files starting with '_' are skipped (templates, drafts).
 Successfully imported files are moved to notes-inbox/processed/.
 """
 
+import base64
+import os
 import re
 import shutil
 import urllib.request
 import urllib.error
 import json
 from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv()
 
 INBOX = Path("notes-inbox")
 PROCESSED = INBOX / "processed"
@@ -76,10 +82,16 @@ def parse_note(path: Path) -> dict:
 
 def post_note(payload: dict) -> str:
     data = json.dumps(payload).encode("utf-8")
+    username = os.getenv("BASIC_AUTH_USERNAME", "")
+    password = os.getenv("BASIC_AUTH_PASSWORD", "")
+    auth = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
     req = urllib.request.Request(
         API_URL,
         data=data,
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Basic {auth}",
+        },
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=60) as resp:
