@@ -24,7 +24,9 @@ notes-inbox/processed/
 scratch.py
 
 # Claude Code tooling (personal dev config, e.g. launch.json for previews)
-.claude/
+# — except commands/, which holds shared project slash commands (checked in)
+.claude/*
+!.claude/commands/
 
 # Local
 NOTES.md

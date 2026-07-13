@@ -270,7 +270,7 @@ claude.ai's web/mobile chat apps and Claude Desktop's own "Connectors" settings 
 
 ## Cloud deployment (Render + Neon)
 
-LearnStack runs as a Docker web service on [Render](https://render.com), backed by a [Neon](https://neon.tech) Postgres database (free tier, with `pgvector`). The web service config lives in `render.yaml`; the database is hosted on Neon and connected via the `DATABASE_URL` secret. (Earlier the database was Render-managed; it was moved to Neon because Render's free Postgres suspends after 30 days — see the migration notes in `CLAUDE.md`, Phase 14.)
+LearnStack runs as a Docker web service on [Render](https://render.com), backed by a [Neon](https://neon.tech) Postgres database (free tier, with `pgvector`). The web service config lives in `render.yaml`; the database is hosted on Neon and connected via the `DATABASE_URL` secret. (Earlier the database was Render-managed; it was moved to Neon because Render's free Postgres suspends after 30 days — see the migration notes in `docs/phases/phase-14.md`.)
 
 > **Render and Neon are the hosts this project happens to use, not requirements.** The only hard dependencies are **Postgres with the `pgvector` extension** and an async connection via the `postgresql+asyncpg://` scheme — any provider that offers those works (Supabase, Render Postgres, AWS RDS, a self-hosted instance, etc.), as does any Docker-capable web host in place of Render. The connection handling is provider-agnostic: `split_ssl_args` in `app/database.py` strips libpq-only SSL params (`sslmode`, `channel_binding`) from *any* URL that carries them and is a no-op otherwise, so a different host's connection string needs no code change. The steps below use Neon + Render as a concrete, worked example — substitute your own and the walkthrough still applies. (The embedding and LLM providers — OpenAI and Anthropic — *are* wired into the code and are not swappable without changes.)
 
@@ -279,7 +279,7 @@ LearnStack runs as a Docker web service on [Render](https://render.com), backed 
 1. Push the repo to GitHub.
 2. Create a Neon project (plain Postgres — no add-ons needed). Copy the **direct** (non-pooler) connection string from Neon's Connect panel; it looks like `postgresql://USER:PASSWORD@ep-xxx.REGION.aws.neon.tech/DBNAME?sslmode=require&channel_binding=require`. Pick a Neon region close to your Render region to minimize latency.
 3. In the Render dashboard: **New → Blueprint** → connect your repo. Render reads `render.yaml` and creates the web service (no database — Render does not provision one).
-4. On the **learnstack** web service → **Environment** tab, set the three secrets: `DATABASE_URL` = the Neon string with the scheme changed from `postgresql://` to `postgresql+asyncpg://` (leave the `?sslmode=...&channel_binding=...` params in place — the app strips them at runtime; see `app/database.py`), plus `OPENAI_API_KEY` and `ANTHROPIC_API_KEY`.
+4. On the **learnstack** web service → **Environment** tab, set the five secrets: `DATABASE_URL` = the Neon string with the scheme changed from `postgresql://` to `postgresql+asyncpg://` (leave the `?sslmode=...&channel_binding=...` params in place — the app strips them at runtime; see `app/database.py`), `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and `BASIC_AUTH_USERNAME`/`BASIC_AUTH_PASSWORD` (see [Authentication](#authentication) — if either is left unset, every gated route 401s).
 5. Deploy — Alembic migrations run automatically on startup, creating the schema and the `pgvector` extension on Neon.
 6. The app is live at your Render-assigned URL.
 
