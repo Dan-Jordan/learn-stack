@@ -45,9 +45,9 @@ When working on Phase 1–3, keep the RAG architecture in mind even when not bui
 
 **Phase 16 — Complete ✓**
 
-Phase 16 gates every route in the deployed app behind HTTP Basic Auth — a single hardcoded username/password pair via `BASIC_AUTH_USERNAME`/`BASIC_AUTH_PASSWORD` env vars — so the app can be shared without being fully public. Every route is gated except `GET /health` (Render's health check can't supply credentials); `/docs`, `/redoc`, and `/openapi.json` are gated too (disabled by default, re-added behind auth) so the API schema itself isn't publicly browsable. The web UI needs no JS changes — the browser's native Basic Auth prompt handles it. This was split off from what CLAUDE.md originally planned as one bundled "Authentication + remote MCP" phase — see the Phase 16 section below for the split rationale.
+Phase 16 gates every route in the deployed app behind HTTP Basic Auth — a single hardcoded username/password pair via `BASIC_AUTH_USERNAME`/`BASIC_AUTH_PASSWORD` env vars — so the app can be shared without being fully public. Every route is gated except `GET /health` (Render's health check can't supply credentials); `/docs`, `/redoc`, and `/openapi.json` are gated too (disabled by default, re-added behind auth) so the API schema itself isn't publicly browsable. The web UI needs no JS changes — the browser's native Basic Auth prompt handles it. This was split off from what CLAUDE.md originally planned as one bundled "Authentication + remote MCP" phase — see `docs/phases/phase-16.md` for the split rationale.
 
-Phase 15 (local stdio MCP server) is complete — see the Phase 15 section below. Phase 14 (Neon database migration) is complete — production Postgres now lives on Neon, with the web service still on Render. See the Phase 14 section below.
+Phase 15 (local stdio MCP server) is complete — see `docs/phases/phase-15.md`. Phase 14 (Neon database migration) is complete — production Postgres now lives on Neon, with the web service still on Render. See `docs/phases/phase-14.md`.
 
 **Future phases are unnumbered.** Completed phases keep their numbers as a historical record; upcoming work is listed in order *without* numbers, so phases can be reordered or inserted without renumbering everything downstream. The future phases below are in intended order.
 
@@ -84,261 +84,30 @@ Phase 15 (local stdio MCP server) is complete — see the Phase 15 section below
 
 ---
 
-## Phase 11 — Complete ✓
+## Completed phase archives
 
-**Goal:** A `POST /chat` endpoint backed by a multi-tool agent loop. Unlike `/draft` (which forces a single tool via `tool_choice`), this agent has multiple tools available and decides — turn by turn — whether to search notes, draft a note, or just respond in text. ✓
+Full narratives for completed phases (Goal / Why / Built / Verified / design-decision
+prose / gotchas) are archived **verbatim**, one file per phase, in `docs/phases/`.
+The durable, compressed record stays in this file — the Decisions log, the
+Risks/gotchas carried into Follow-ups, the RAG phases overview table, and the
+Conventions section. Consult an archive when working on something that phase built.
 
-**Why:** `/query`, `/ask`, and `/draft` each wrap one capability behind one endpoint with no decision-making. This phase introduces the agent-loop pattern (`tool_choice: "auto"`, multi-turn tool execution, conversation state) as its own learning milestone, distinct from the Insights phase's batch/scheduling pattern.
-
-Built:
-- [x] `app/assistant.py` — `_TOOLS` (`search_notes`, `create_note`) and `run_assistant(messages, db)`: call the model with `tool_choice` defaulted to `"auto"` → if `tool_use`, dispatch to the matching `app/crud/notes.py` function and append a `tool_result` → repeat until the model responds in text or the `MAX_ITERATIONS = 5` cap is hit. `create_note` is confirm-before-save — it records the proposed draft in the trace and does **not** persist
-- [x] `app/schemas/note.py` — `NOTE_TOOL_INPUT_SCHEMA` (shared `create_note` tool contract, referenced by both `agent.py` and `assistant.py`) plus the `/chat` schemas: `ChatRequest` (`{message, history}`), `ChatResponse` (`{reply, trace}`), `ToolCall`, and `ChatMessage`
-- [x] `app/routers/assistant.py` — `POST /chat`: maps `{message, history}` to the Anthropic message list and returns the final text plus a trace of tools called
-- [x] `app/main.py` — assistant router registered
-- [x] `static/index.html` — new "Assistant" tab: a chat transcript (user/assistant bubbles + a tool-call trace line), distinct from the single-shot Ask tab. `create_note` proposals render as a card with a Save button (`POST /notes`)
-- [x] `tests/test_assistant.py` — 7 tests; mock `app.assistant._client` with scripted tool-use/text responses to exercise the real loop (dispatch, termination, the iteration cap, confirm-before-save, graceful tool-error handling). 34 tests passing total
-
-**Design decisions:**
-- `tool_choice: "auto"` (achieved by omitting `tool_choice`) is the defining difference from `/draft`'s forced single tool — this is what makes it an agent rather than structured extraction
-- **`create_note` is confirm-before-save (human-in-the-loop)** — the agent records the proposed draft in the response trace but never persists it; the user reviews and saves via `POST /notes`. Keeps junk out of the RAG store, consistent with `/draft`
-- **Model: Claude Haiku 4.5** (`claude-haiku-4-5-20251001`) — consistent with `/draft` and `/ask`; cheapest model, sufficient for a 2-tool loop at personal scale
-- **Hard cap `MAX_ITERATIONS = 5`** — prevents runaway looping; on cap, return the current text flagged with the limit
-- **Shared `NOTE_TOOL_INPUT_SCHEMA`** — the `create_note` tool input schema is defined once in `app/schemas/note.py` and referenced by both `agent.py` and `assistant.py`, so the note shape can't drift. Per-field descriptions live in the shared schema; each caller supplies its own top-level tool `description`
-- **Instruction placement** — trigger / when-to-call guidance lives on the tool `description`; the editorial "what makes a good note" policy lives in the `system` prompt (canonical copy is this file's "What makes a good note" section). DRY applies to contracts/schemas, not to prompt prose tuned per surface
-- **Request uses client-supplied `history`, not `conversation_id`** — makes multi-turn work statelessly now (like `/ask`); a `conversation_id` would be a no-op without server-side storage, which stays deferred. History is text-only — `tool_use`/`tool_result` blocks are not replayed across turns; the loop re-derives tool use each message
-- **`ToolCall.input` is `dict[str, Any]`** — deliberately loose so the response schema isn't coupled to the tool set; the `create_note` draft rides through this field for the UI's Save button
-- `run_assistant(messages, db)` takes the DB session — the loop needs it to dispatch tool calls to `app/crud/notes.py`
-- Launch with two tools (`search_notes` + `create_note`) — one read, one write — to keep the focus on the agent loop. `get_note` (by-ID fetch) and snippet-trimming are deferred: retrieval/cost optimizations, not agent-loop concepts
-- Tool execution dispatches to existing `app/crud/notes.py` functions — no duplicated business logic; the agent is a new orchestration layer
-- **Tests mock `app.assistant._client`, not `run_assistant`** — exercises the real loop; mocking the helper would test nothing. The `_client()` indirection is the test seam (see the Testing convention note below)
-- `/draft` remains for "I have raw content, structure it"; the assistant is for "have a conversation, the model decides what to do" — not a replacement
-
-**Open questions / follow-ups:**
-- Cost: a single user message can trigger multiple API calls (search → reason → maybe draft) instead of `/ask`'s one
-- Overlap with `/ask` — decide whether `/ask` stays as a simpler always-search-then-answer option or eventually folds into `/chat` (tracked in the Follow-ups table)
-
----
-
-## Phase 12 — Complete ✓
-
-**Goal:** A GitHub Actions workflow runs the full test suite against real Postgres + pgvector on every pull request, and a branch-protection rule requires that check to pass before merge to `main`. ✓
-
-**Why:** `main` auto-deploys to Render on merge (Phase 10), but nothing currently stops a broken merge from shipping — the only safeguard was remembering to run `pytest` locally on Windows. CI closes that gap and adds a Linux test run matching the deploy target, catching environment-specific breakage before Render does. First of two production-fundamentals phases (CI, then logging) taken before resuming feature work.
-
-Built:
-- [x] `.github/workflows/ci.yml` — triggers on `pull_request` and pushes to `main`; Python 3.11 with pip cache, a `pgvector/pgvector:pg15` service container (health-checked with `pg_isready`), `pip install -r requirements.txt`, `CREATE EXTENSION IF NOT EXISTS vector`, then `pytest`. No secrets configured — the suite makes no live API calls
-- [x] `tests/conftest.py` — autouse `mock_embeddings` fixture patches `app.crud.notes.embed_text` (the single seam feeding both the note-write and semantic-query paths) with a deterministic stand-in, so the suite needs no `OPENAI_API_KEY`
-- [x] `tests/test_query.py` — `test_semantic_query_ranking` rewritten to inject **controlled** vectors (query ≡ SQLAlchemy note → score 1.0; Docker note orthogonal → score 0.0), testing the ordering/scoring code deterministically with no live call. Every test now runs on every PR — no skips, no marker
-- [x] `README.md` / `CLAUDE.md` — CI gate and the no-secrets testing approach documented
-- [x] Branch-protection ruleset on `main` (GitHub settings) — requires the CI `test` check to pass and the branch to be up to date before merge; PRs required with **0 required approvals** (solo repo); deletions and force-pushes blocked. Enabled after the first green CI run on a PR
-
-Verified: `pytest` with no keys → 34 passed, 0 skipped — the entire suite (including ranking) runs deterministically and offline. The first PR's CI run surfaced a real gap (the app required `DATABASE_URL` at import; not set in CI) — fixed in `ci.yml`, then green.
-
-**Design decisions:**
-- **Mock the embedding call rather than give CI a real `OPENAI_API_KEY`** — a merge gate must be deterministic and self-contained; a live model call can flake on model drift, network, or rate limits, and a gate that goes red for reasons unrelated to the diff trains you to ignore red. CI tests *your* code, not OpenAI's model. No secret also keeps the key out of CI entirely, consistent with `render.yaml`'s `sync: false` posture. The discovery that drove this: contrary to the original plan's assumption, most of the suite (`test_notes`, `test_query`, `test_ask`) made **live** embedding calls — it was never actually mocked
-- **One autouse fixture patching a single seam (`embed_text`)** — both the write path and the query path funnel through it, so one patch neutralizes every live call. The stub is content-derived (deterministic per text) with non-negative components, which keeps cosine distance in `[0, 1]` and similarity scores in the `[0, 1]` range the tests assert
-- **Ranking test uses controlled vectors, not the real API** — `test_semantic_query_ranking` asserts that the closest vector ranks first with the right score. The thing worth testing is *LearnStack's* ordering/scoring code, which is deterministic; *OpenAI's* semantic quality is its own concern and isn't LearnStack's to test. By injecting known vectors the test runs in CI on every PR with no key — rather than a `skipif`-gated live test that silently never runs (pytest doesn't load `.env`, so it would skip even locally). If a live smoke check of real embeddings is ever wanted, the right home is a separate scheduled workflow with a secret, not a test in the merge gate — deferred as over-engineering at personal scale
-- **Prebuilt `pgvector/pgvector:pg15` service container** — avoids compiling pgvector from source the way the local `Dockerfile` does, so runs stay fast
-- **`create_all`, not Alembic, in CI** — `conftest.py` builds the schema directly from the ORM models, so CI only needs the `vector` extension present (the service container creates the database via `POSTGRES_DB`); no migration step is required for the test run
-- **Gate covers `pytest` only** — linting / type-checking are a deliberate later addition, not part of this phase
-
-**Risks / gotchas (carried forward):**
-- Branch protection on a solo repo can block your own merges if misconfigured — enabled only after a green PR run, and configured safely: **Required approvals: 0** (GitHub won't let you approve your own PR, so ≥1 would lock you out), with admin bypass left available as an escape hatch
-- The app reads `DATABASE_URL` at import time, so CI must set it even though tests override the DB session — logged as a Follow-up (lazy engine init would remove the requirement)
-
----
-
-## Phase 13 — Complete ✓
-
-**Goal:** Deliberate, leveled logging across the app's boundaries and error paths — external API calls (OpenAI/Anthropic), database writes, and failure points — configured centrally and driven by an env var, so the running app (especially on Render) is debuggable. ✓
-
-**Why:** Logging before this phase was a root `basicConfig` in `app/main.py` plus a single `logger.exception` in `app/assistant.py`. The rest — `crud/notes.py`, `embeddings.py`, `llm.py`, `agent.py` — was silent, so a failed embedding, an empty search, or a timed-out API call on Render left no useful trace. This phase made the deployed app observable. The emphasis was the judgment of *where* and *at what level* to log — getting the full set of considerations right, not maximizing volume.
-
-Built:
-- [x] `app/main.py` — central config: level driven by `LOG_LEVEL` (default INFO, safe fallback to INFO on an unrecognized value rather than crashing startup); format `"%(asctime)s %(levelname)s %(name)s: %(message)s"` so every line carries a timestamp + emitting module + level. Existing `httpx`→WARNING quieting kept
-- [x] Per-module loggers (`getLogger(__name__)`) added to `embeddings.py`, `llm.py`, `agent.py`, `crud/notes.py`, generalizing the pattern already in `assistant.py`
-- [x] External-call seams: DEBUG before the `embed_text` call (size only — fires per-write *and* per-search, too frequent for INFO) with an explicit `logger.error` on failure that carries the input size; INFO breadcrumbs before the discrete `/ask` (`generate_answer`) and `/draft` (`draft_note`) calls; INFO per `/chat` agent-loop iteration (which tools the model chose) plus a WARNING on the iteration cap
-- [x] `crud/notes.py` — INFO on note create/update/delete (id and changed field names only); INFO with count on a semantic search that returns results, WARNING when it returns zero (placed in `search_notes_semantic` so `/query`, `/ask`, and `/chat` all share it)
-- [x] `LOG_LEVEL` added to `.env.example` (with a comment listing valid values) and `render.yaml` (as a committed `value: INFO`, not a `sync: false` secret)
-- [x] `README.md` / `CLAUDE.md` — `LOG_LEVEL` and the level convention documented
-
-Verified: full suite stays green (34 passed). Log output was confirmed two ways without paid API calls — an isolated check that `LOG_LEVEL` toggles the DEBUG line on/off and the format renders correctly, and a targeted `pytest --log-cli-level=INFO` run showing the real `crud/notes.py` lines firing (`Created note <id> (type=...)`, `Updated note <id> (fields=['title'], re-embedded=False)`, `Semantic search returned N note(s)` / `... no notes`).
-
-**Design decisions:**
-- **`LOG_LEVEL` parsed with a safe fallback** — `getattr(logging, LOG_LEVEL.upper(), logging.INFO)` so a typo in the env var falls back to INFO instead of crashing the app on startup (a startup crash on Render is worse than a wrong level)
-- **`LOG_LEVEL` is config-as-code (`value: INFO`), not a dashboard secret** — it isn't sensitive, so the default belongs in version control where it's visible and tracked; changing verbosity is a deliberate, reviewable edit-and-redeploy, unlike the `sync: false` API keys. Trade-off accepted: no dashboard-only flip without a deploy
-- **Level rule, applied consistently:** DEBUG = high-frequency internal plumbing (`embed_text`) and request-shape detail; INFO = discrete user-facing operations and state changes (note create/update/delete, `/ask`, `/draft`, per-loop iteration, search-returned-N); WARNING = recoverable oddities (0 search results, iteration cap); ERROR/`exception` = failures
-- **`logger.error` (re-raise) vs `logger.exception` (swallow)** — the deciding factor is whether the exception keeps propagating. If it's re-raised, log a one-line context message with `logger.error` and *no* `exc_info`, letting whoever finally handles it log the traceback (the ASGI handler, or the `/chat` loop) — this avoids duplicate tracebacks. If it's swallowed here (the agent loop's tool-dispatch `except`), use `logger.exception` because that's the only place the traceback gets captured
-- **`embed_text`'s ERROR wrap earns its place by adding context, not visibility** — the failure is logged with a traceback either way (uvicorn, or the `/chat` loop). The wrap exists to carry the *input size*, which the traceback lacks and which distinguishes a token-limit failure from a transient one. Its pre-call breadcrumb is DEBUG (invisible in prod), so this is also the only embedding-specific signal at the prod level
-- **Never log values** — only note ids, changed field *names*, sizes, and counts. No API keys, embedding vectors, raw note content, or question text
-- **Routers deliberately left unlogged** — their only error paths are the `404` `HTTPException`s, which are expected client outcomes already recorded in uvicorn's access log; 500-class failures already get a traceback from uvicorn (or the `/chat` loop). Adding request logging would duplicate uvicorn and be exactly the cargo-cult the phase warns against
-
-**Scope boundary:** logging only. Metrics, distributed tracing, and error-aggregation services (Sentry, OpenTelemetry) are a deliberately separate, later concern. The planned (stretch) request-correlation ID through the `/chat` loop was **not** built — deferred as over-engineering at personal scale; see Follow-ups.
-
-**Risks / gotchas (carried forward):**
-- Cargo-cult logging — a `logger.info` on every function is noise worse than silence; the value is entirely in placement and level. This drove the decision to leave the routers unlogged
-- Wrong-level inflation — logging recoverable conditions as ERROR trains you to ignore ERROR (why 0-results is WARNING, not ERROR)
-- Leaking secrets/PII into logs is a real production failure mode — mitigated by the never-log-values rule, but worth re-checking whenever a new log line is added
-
----
-
-## Phase 14 — Complete ✓ (Neon database migration)
-
-**Goal:** Move the production Postgres database off Render's free tier onto Neon's free tier, with no loss of notes and no change to local dev, tests, or CI. The web service stays on Render; only the database moves. Done when the deployed app on Render reads and writes against Neon, the existing notes have been migrated across, and `render.yaml` no longer provisions a Render database.
-
-**Why:** Render's free Postgres instance is suspended after 30 days, so the database needs a new home regardless. Neon's free tier is genuinely free (not time-boxed), speaks standard Postgres, and — critically — supports `pgvector`, which the entire RAG stack depends on. Keeping the web service on Render and moving only the database to Neon is the smallest change that solves the expiry. (Supabase is the comparable free + pgvector alternative; Neon is a fine choice and not worth overthinking.)
-
-**This is its own phase, not part of Insights.** It is time-sensitive (gated by Render's suspension date, whereas Insights is unhurried feature work) and a different concern (deployment/infrastructure, not clustering). Bundling an SSL/connection change with a KMeans feature into one PR would be hard to review and hard to roll back — so it stays a single coherent change, consistent with the one-phase-one-concern convention. Whether it carries a phase number is cosmetic; numbering it Phase 14 (and pushing Insights to 15) keeps the two unbundled, which is the point.
-
-**Blast radius is small — production connection only.** Local dev, the test suite, and CI all use the Docker / CI `pgvector` container, not the cloud database, so they are untouched. No business logic moves — only the two database *connection* paths (`app/database.py` and `alembic/env.py`) plus `render.yaml`; this is a connection-string and config change plus a one-time data copy.
-
-Built:
-- [x] `app/database.py` — `split_ssl_args()` moves Neon's libpq-only TLS params out of the URL and into asyncpg's `connect_args`. It strips **both** `sslmode` *and* `channel_binding` (Neon's copy-paste string carries both; asyncpg rejects both), and passes `connect_args={"ssl": True}` when SSL was requested. For the local Docker URL (no `sslmode`) it is a no-op: query stays empty, `connect_args` comes back `{}`, behavior unchanged — so local dev, tests, and CI are untouched
-- [x] `alembic/env.py` — the migration engine calls the **same** `split_ssl_args()` (imported from `app.database`). This was the first-deploy fix: `env.py` built its own engine straight from `DATABASE_URL`, bypassing the helper, so `alembic upgrade head` crashed on the `sslmode` param before the app started even though the app engine was already fixed. Both connection paths now share one helper and can't drift
-- [x] `render.yaml` — `databases:` block removed (Render no longer provisions the database). `DATABASE_URL` stays a `sync: false` dashboard secret; the Neon connection string (scheme `postgresql+asyncpg://`, params stripped at runtime by the code above) is pasted into the Render Environment tab
-- [x] Neon project created (`learnstack`, Postgres 18.4, AWS us-west-2 / Oregon — co-located with the Render web service to minimize cross-DC latency). The **direct** (non-pooler) endpoint is used. `pgvector` 0.8.1, installed by the startup migration's `CREATE EXTENSION IF NOT EXISTS vector`
-- [x] Render redeploy against Neon — live. Deployed via merge to `main` (auto-deploy) with the SSL fix in place, after the `DATABASE_URL` secret had been staged with "Save only". (The Neon password was rotated mid-migration after being shared during setup; the new value was set in Render before the successful deploy.)
-- [x] Data migration — existing notes copied from local Docker Postgres into Neon with `pg_dump -t notes` → `pg_restore --data-only -t notes` (the startup migration created the schema first)
-- [x] `README.md` / `CLAUDE.md` — deployment docs, phase list, and tech-stack tables point the database at Neon; decisions and gotchas recorded in the decisions log
-- [x] `notes-inbox/` — the connection gotchas captured as notes (asyncpg can't parse `sslmode`/`channel_binding`; direct vs pooler endpoint; deploy ordering), imported to the notes DB
-
-Verified: locally against live Neon before deploy — connecting through `app.database` succeeds; engine receives `...neon.tech/neondb` (no `sslmode`/`channel_binding`) with `connect_args={'ssl': True}`; server reports PostgreSQL 18.4; `pgvector` 0.8.1. After the `env.py` fix, `alembic upgrade head` against Neon cleared the `sslmode` parse and reached real authentication. Installed driver versions: SQLAlchemy 2.0.50, asyncpg 0.31.0 — `connect_args={"ssl": True}` is the correct form for these. Full suite stays green (34 passed) — the change is a no-op for the no-SSL local/CI URL.
-
-**Design decisions:**
-- **Move only the database, keep the web service on Render** — the web service free tier is not expiring; the database is. The smallest change that fixes the actual problem
-- **Neon over staying on Render / over Supabase** — Render's free Postgres is the thing expiring, so staying isn't an option. Neon is picked over Supabase only on simplicity-of-fit; both are free with pgvector. Not worth deeper evaluation at personal scale
-- **Declined Neon's add-ons (Neon Auth / "Backend Services", `neonctl init` AI tooling)** — Neon Auth is a multi-user identity system (users/sessions tables, OAuth); the project's upcoming Authentication phase is deliberately single-user HTTP Basic Auth, and multi-user is explicitly not planned. Adopting it would also couple the app to a Neon-specific product, cutting against this phase's whole point (staying DB-agnostic so the next move is cheap). Created a plain Postgres project, nothing else
-- **Direct endpoint over the pooler** — avoids the asyncpg-prepared-statements-vs-PgBouncer problem entirely for a single low-traffic service, rather than carrying a `statement_cache_size=0` workaround for pooling the app doesn't need
-- **SSL via `connect_args`, both `sslmode` and `channel_binding` stripped from the URL** — asyncpg's TLS is configured through the driver (`connect_args={"ssl": True}`), not libpq URL params. Neon's copy-paste string carries *both* `sslmode=require` and `channel_binding=require`, and asyncpg rejects both; stripping only `sslmode` would leave the second as a hidden second failure. The stripping is implemented generically (`split_ssl_args`, shared by the app engine and the Alembic migration engine) so the local URL with no such params is unaffected
-- **`DATABASE_URL` stays a dashboard secret (`sync: false`)** — unchanged posture from Phase 10; the connection string (now Neon's) is still set in the Render dashboard, never committed
-- **No business logic moves** — `crud/`, `routers/`, logging, and the agent loops are all DB-agnostic; this phase touches only the two DB *connection* paths (`app/database.py`, `alembic/env.py`) and `render.yaml`
-- **The SSL helper is shared between the app engine and the migration engine** — the original fix only covered `app/database.py`; the first deploy crashed because `alembic/env.py` builds its own engine and bypassed it. Both now import one `split_ssl_args()` so the two connection paths handle Neon identically and can't drift. (This is the same contract-DRY principle the Phase 11 note records — share the contract, not context-tuned prose)
-
-**Risks / gotchas:**
-- **Time-sensitive** — the data copy must happen before Render suspends the instance, or the notes are gone. This is the one hard deadline in the phase
-- **Deploy order matters** — the SSL-stripping fix must be on `main` *before* the live app points at Neon. Pointing the deployed (pre-fix) app at the Neon URL would crash-loop on the `sslmode` param. Mitigated by saving the Render `DATABASE_URL` with "Save only" (no deploy) and letting the merge-triggered deploy pick it up with the fix in place
-- **asyncpg + `sslmode`/`channel_binding`** — the first-deploy failure mode; the URL must have both stripped and SSL passed via `connect_args` (handled by `split_ssl_args`, used by both the app and migration engines)
-- **Pooler vs direct endpoint** — using the `-pooler` host with asyncpg's default prepared-statement caching causes intermittent failures; use the direct host (or `statement_cache_size=0`)
-- **Cold-start latency** — Neon autosuspends on idle; the first request after a quiet period is slow (Neon takes ~1–3s to wake). Inherent and accepted on a free tier. Separately, autosuspend *drops* pooled connections, so without a liveness check that first request would also *error* (a dead connection from the pool) — handled by `pool_pre_ping=True` on the engine; see the decisions log
-- **`DATABASE_URL` scheme** — must be `postgresql+asyncpg://` (not Neon's default `postgres://`), same conversion already noted for Render
-
----
-
-## Phase 15 — Complete ✓
-
-**Goal:** A local (stdio) MCP server exposes LearnStack's notes tools — `search_notes` (read) and `create_note` (staged write) — over the Model Context Protocol, so any Claude Code surface (CLI, VS Code extension, or the Claude Code shell inside Desktop) can search and capture notes that land in the **Neon** system-of-record database. `create_note` stages to a new `pending_notes` table; the note is reviewed, edited, and approved in a new "Pending" tab in the web UI, and only then embedded and promoted into the `notes` table. Done when: from Claude Code, "create a note about X" stages a pending note in Neon, and approving it in the Pending tab produces a `notes` row identical to one created any other way.
-
-**Why:** Two things at once. (1) It builds the **provider side** of the agent/tool pattern — Phase 11 built the *host* side (the `/chat` loop that decides which tool to call); this exposes tools *over the protocol* so any host can use them. That's a distinct, marketable skill (MCP is the default integration layer across the industry), and having both sides demonstrates the whole pattern. (2) It fixes a real, felt sync problem: notes captured from Claude Code currently reach only **local** Docker via `import_notes.py`, so Neon — what the deployed app reads — drifts. With Neon as the system of record and the MCP `create_note` pointed at `DATABASE_URL` (= Neon), capturing from Claude Code lands the note in production, behind a review gate. The staged-write gate applies the "nothing writes to the system of record without a checkpoint" instinct to an agentic interface — a data-governance pattern, not just a wired-up function call.
-
-**Internal build sequence (one phase, ordered for learning):**
-1. **`search_notes` (read-only) first** — stands up the entire MCP server: server, tool discovery, schema, stdio transport, connecting Claude Code to it. Zero write risk, so this is where the pure "learn MCP" work lives. Reuses `crud.search_notes_semantic`.
-2. **`create_note` (write)** — stages to the new `pending_notes` table. Does **not** touch `notes` and does **not** embed.
-3. **"Pending" review** — the web-UI tab to list / edit / approve / reject staged notes. Approve calls the **existing** `crud.create_note` (embeds the final text, inserts into `notes`, deletes the pending row).
-
-The gate (steps 2–3) does not have to be built in lockstep with the `create_note` step during branch dev, but it **must be in place before the phase merges to `main`** — merge auto-deploys and points the live tool at Neon, so no ungated write to the system of record may ship.
-
-**Built:**
-- [x] `app/prompts.py` (new) — shared model-steering prose: `SEARCH_NOTES_TOOL` (full def), `CREATE_NOTE_TRIGGER`, `NOTE_QUALITY_GUIDANCE`, moved out of `assistant.py`. **Landed in a new `app/prompts.py`, not `schemas/note.py` as first sketched** — the prose is a different concern from the Pydantic models; `NOTE_TOOL_INPUT_SCHEMA` (the note *data contract*) stays in `schemas/note.py` beside `NoteCreate`. `app/agent.py` also adopted `NOTE_QUALITY_GUIDANCE`.
-- [x] `app/assistant.py` / `app/agent.py` — consume the shared constants. `/chat`'s `_SYSTEM` and `create_note` description are byte-identical to before; `/draft`'s guidance now uses the shared wording.
-- [x] `app/mcp_server.py` (new) — **low-level `mcp.server.Server`, not FastMCP** (see decisions). `list_tools()` advertises **both** `search_notes` and `create_note`, each reusing the shared name/description/schema (schema value re-keyed `input_schema`→`inputSchema`). `call_tool()` routes to `_search_notes` / `_create_note`, each on a per-call `AsyncSessionLocal`: `_search_notes` → `crud.search_notes_semantic`; `_create_note` builds a Pydantic-validated `NoteCreate` and stages it via `crud.pending.create_pending` (never writes `notes`, never embeds), returning a "staged for review" confirmation with the pending id. DB target via `DATABASE_URL`; logging goes to **stderr** because stdout is the JSON-RPC channel.
-- [x] Alembic migration + `PendingNote` model — new `pending_notes` table with the writable `NoteCreate` fields (`title`, `content`, `note_type`, `tool`, `project`, `topic`) plus `id` and `created_at`. **No embedding column** — embedding happens only on promotion to `notes`. Model in `app/models/note.py`; migration `daf904df7559` uses `postgresql.ENUM(create_type=False)` so it doesn't re-create the existing `notetype` enum.
-- [x] `app/crud/pending.py` (new) — `create_pending`, `get_pending`, `list_pending`, `update_pending`, `approve_pending` (→ calls existing `crud.notes.create_note`, then deletes the pending row — promote-then-delete), `reject_pending`. One-way import from `crud/notes.py`, no cycle.
-- [x] `app/routers/pending.py` (new) — `GET /pending` (list), `PUT /pending/{id}` (edit, reuses `NoteUpdate`), `POST /pending/{id}/approve` (promote → `NoteResponse`, 201), `DELETE /pending/{id}` (reject, 204). **No HTTP create** — staging is MCP-only. Registered in `app/main.py`.
-- [x] `static/index.html` — new "Pending" tab: lists staged notes as inline-editable cards; Approve persists edits (`PUT`) then promotes (`POST …/approve`); Reject deletes behind a `confirm()`. Lazy-loads on first open with a Refresh button.
-- [x] `tests/` — `test_mcp.py` (6: tool discovery + dispatch, mock crud); `test_pending.py` (8: CRUD + endpoints incl. approve-promotes-and-embeds, embedding covered by the autouse `mock_embeddings` fixture). `conftest.py` gains a shared `engine` fixture + a `db_session` fixture to seed pending rows (no HTTP create path).
-
-Verified: full suite green — **48 passed** (14 new: 8 pending + 6 MCP). Approve flow smoke-tested end-to-end against the live app: `PUT` edit → `POST …/approve` promotes with the edit, note lands in `notes` (embedded), pending queue empties. The MCP server boots cleanly (`python -m app.mcp_server`) and stages `create_note` into `pending_notes`. Post-merge, the live Render app's `GET /pending` returns `200 []`, confirming the startup migration created `pending_notes` in Neon. The MCP server is registered with Claude Code at **user scope** — one entry in `~/.claude.json` covers the CLI, the VS Code extension, and the Desktop app's Claude Code shell — env pointed at Neon's `DATABASE_URL`. See **MCP host wiring** below for the registration sequence.
-
-**Design decisions:**
-- **One phase, internally sequenced read → write → review**, gate present before merge — keeps concepts unmixed while never shipping an ungated write to the system of record.
-- **Local (stdio) transport; DB target config-driven via `DATABASE_URL` (set to Neon).** Solves the sync problem immediately and privately (stdio is you-only by construction); going remote later is an additive layer (transport + auth), reused wholesale — that's the separate **Authentication + remote MCP** phase, not this one.
-- **Neon = system of record; local Docker = dev/test scratch.** The MCP write path targets Neon; this is the project accepting that Neon, not local, holds the real notes.
-- **Staged writes = a separate `pending_notes` table, not a `status` column on `notes`.** Keeps the `notes` table invariant clean (every row is a real, approved, embedded note — no NULL-embedding half-rows), so no read path — present or future, embedding-based or not — needs to know "pending" exists. Editing a pending note is a cheap text `UPDATE`; **embedding happens once, at approval, on the final text**, never on a draft still being edited or one that gets rejected.
-- **Reuse the existing note contract and write path.** MCP `create_note` uses `NOTE_TOOL_INPUT_SCHEMA`; approval calls the existing `crud.create_note`, so an approved note is byte-for-byte the same shape as any other. The `notes-inbox/_template.md` frontmatter/body maps 1:1 onto those same fields — the markdown template and the schema are two views of one note shape, so the MCP path honors the template without routing through a `.md` file.
-- **DRY the prompt assets, truthfully.** `search_notes` is shared verbatim; `NOTE_QUALITY_GUIDANCE` and the `create_note` trigger are shared; `/chat` keeps the guidance in its **system prompt** while MCP carries it on the **tool description** (MCP servers can't set the host's system prompt). The one intentionally *un*-shared bit is `create_note`'s behavior sentence — `/chat` "proposes a draft in the trace, never persists" vs MCP "stages a pending row" — because the surfaces genuinely persist differently. Share the contract and the policy; keep surface-specific behavior prose per surface (Phase 11 principle). **The shared prose lives in a new `app/prompts.py`, not `schemas/note.py`** — prose that steers a model is a different concern from Pydantic validation. `NOTE_TOOL_INPUT_SCHEMA` stays in `schemas/note.py` because it *mirrors `NoteCreate`* (two views of one note shape, kept adjacent so they can't drift); `prompts.py` imports nothing from `note.py`, so there's no cycle, and each `create_note` tool def is assembled at its consumer from prose (`prompts`) + schema (`note`).
-- **Low-level `mcp.server.Server`, not FastMCP.** FastMCP is a convenience wrapper that *generates* a tool's JSON schema *from* a typed Python function (introspecting the signature / Pydantic `Field`s). It cannot consume a pre-built schema dict. But `NOTE_TOOL_INPUT_SCHEMA` already exists as data and is already fed to the Anthropic Messages API in `/chat` and `/draft` — so the note contract *must* live as a dict, shared by three consumers. Low-level `Server` takes that dict directly (`types.Tool(inputSchema=…)`), keeping one source of truth; FastMCP would force a second definition (a function signature / Pydantic model) and reintroduce the drift Phase 15 step 1 removed. The plan's word "FastMCP" was shorthand for "an MCP server"; its stronger commitment ("reuse the shared def") wins. Bonus: the low-level API also exposes MCP's real mechanics — tool *discovery* (`list_tools`) and *dispatch* (`call_tool`) — which mirror the `/chat` loop's own dict-of-tools + dispatch-by-name model.
-- **stdout is the protocol; logs go to stderr.** The stdio transport uses stdout for JSON-RPC. `app/mcp_server.py`'s entry point calls `basicConfig(stream=sys.stderr, …)` so `crud`/`embeddings` log lines can't corrupt the channel. (The FastAPI app's `basicConfig` in `main.py` never runs for the MCP server — it's a separate entry point.)
-- **Keep `app/assistant.py` / `/chat`.** Different surface and audience — an in-app assistant that needs no Claude client, vs. a bring-your-own-Claude host pointed at the MCP server. Keeping both shows both sides of the protocol; they share `crud` + schema, so there's one source of truth for behavior with two front doors (as `/draft`, `/chat`, and REST `/notes` already coexist).
-- **Review/edit/approve happens in the web-UI "Pending" tab** — a human checkpoint at a real UI, the durable version of the ephemeral review gate `/draft` already provides.
-- **`PendingNoteResponse` is the only new schema; reuse `NoteCreate`/`NoteUpdate` as the pending write/edit contracts.** A pending note's *writable* shape **is** `NoteCreate` by design (approval must produce an identical note), so parallel `PendingNoteCreate`/`Update` schemas would be drift waiting to happen. Only the *response* differs — it drops `updated_at` and `embedding` (the model has neither).
-- **Separate `app/crud/pending.py`, imported one-way from `crud/notes.py`.** `pending.py` imports `create_note`; `notes.py` knows nothing about pending — no cycle. `approve_pending` **promotes then deletes** (create_note embeds+inserts+commits first, then the pending row is deleted) so a failed delete leaves a real note + a rejectable stale row, never a lost note. This spans two commits — accepted at personal scale.
-- **Pending router has no HTTP `POST` create; reject is `DELETE`, approve is `POST …/approve`.** Staging happens only through MCP (`crud.create_pending`), so an HTTP create endpoint would be unused. Reject is a plain resource removal (`DELETE`→204); approve is a state transition that *produces* a new resource, so it returns the created `NoteResponse` (201).
-- **MCP `create_note`'s behavior sentence is per-surface; the quality policy rides on the tool description.** `/chat` says "proposes an unsaved draft"; MCP says "stages a pending row" — genuinely different persistence, so the sentence is assembled at each consumer. Because an MCP server can't set the host's system prompt, `NOTE_QUALITY_GUIDANCE` rides on MCP's tool *description* (weaker steering than `/chat`'s system prompt — an accepted limitation).
-- **Pending-tab Approve does `PUT`-then-approve; card field values are set as DOM properties, not HTML attributes.** Approve persists the card's current field values before promoting, so inline edits aren't lost (approval promotes what's in the DB). Field values are assigned via `.value` (not interpolated into an `innerHTML` `value="…"`) so Markdown content with quotes/backticks can't break the markup.
-- **conftest: shared `engine` fixture + a `db_session` fixture.** Pending notes have no HTTP create path, so endpoint tests seed rows directly via `db_session` on the *same* engine the client uses (committed rows are visible to requests). The `client` fixture's behavior is unchanged — the split is purely additive.
-- **Registered with Claude Code at user scope (`--scope user`), not the CLI's local-scope default.** Local scope nests a server's config under a key computed from the literal project working-directory string — case-sensitive, despite Windows paths being merely case-*preserving*, and computed inconsistently between the bare CLI and a VS Code-hosted session (confirmed: the two could resolve to different keys from the same repo). User scope stores the `learnstack` entry once, at the top level of `~/.claude.json` (a sibling of `"projects"`, not nested under any path), so the CLI, the VS Code extension, and the Claude Code shell inside the Desktop app all resolve to the exact same entry — no per-project keying left to disagree. Trade-off accepted: the server's tools are available in every Claude Code session for this user account, not scoped to just this repo — fine for a personal notes server.
-
-**Risks / gotchas:**
-- **No ungated write to Neon may ship** — the gate must be in place before merge, because merge auto-deploys and points the live `create_note` at Neon. (The gate — staged writes + Pending tab — is now complete.)
-- **Never embed a pending note** — pending notes have no embedding, so they're absent from every embedding-based path automatically; any *new* "all notes" query must read `notes`, not `pending_notes`.
-- **The local stdio server does not change the public-exposure posture** — it's private by construction. Do **not** expose the MCP server over HTTP in this phase; remote exposure + auth is the next phase, deliberately paired with locking the app down.
-- **MCP hosts can't be given a system prompt by the server** — note-quality steering is weaker than inside `/chat`; mitigated by putting `NOTE_QUALITY_GUIDANCE` on the tool description.
-- **`notes-inbox/` + `import_notes.py` become a divergent legacy review path** (writes to *local*, while the real gate now targets Neon) — flagged in Follow-ups; decide retire-vs-repoint after this phase lands, not before.
-- **`claude mcp add-json` is broken in Claude Code CLI 2.1.152** — it rejects even trivially valid JSON (e.g. `{"command":"python"}`) with a generic `Invalid configuration: : Invalid input`, regardless of payload content or quoting style. A known upstream bug, not a project-specific mistake — re-check on CLI upgrade in case it's fixed.
-- **`claude mcp add`'s flag form breaks on *any* dash-prefixed token after `--`**, not just `-m` as originally documented. Commander's argument parser loses the required positional `commandOrUrl` entirely if `-e KEY=value` is combined with `--`, or if any subprocess arg after `--` starts with `-` (confirmed with `--version`, `-m`, `-File`). The only combination that reliably works is `claude mcp add <name> -- <bare command> <bare args>` with **zero** dashes anywhere after `--` and **no** `-e` flags at all.
-
-**MCP host wiring — complete.** The mechanism: `app/database.py` calls `load_dotenv(override=False)`, so a `DATABASE_URL` set in the MCP server's *process env* **wins over the repo `.env`** — the server hits Neon while the local web app and `pytest` keep using the Docker `.env`. **Do not repoint the repo `.env` at Neon** (that would send local dev and tests to production) and **do not set `DATABASE_URL=Neon` as a global OS env var** (same reason — it would leak into the local app). Set Neon *only* in the server's env block in `~/.claude.json`.
-
-1. ~~Merge to `main`~~ — done; `GET /pending` on the live Render app returns `200 []`, confirming `pending_notes` exists in Neon.
-2. ~~Register with Claude Code~~ — done, at **user scope**, which covers the CLI, the VS Code extension, and the Claude Code shell inside the Desktop app from one entry (confirmed connected from all three). The working sequence:
-   ```powershell
-   # 1. Register the bare command at user scope — no -e, no dashes after --, or the parser breaks:
-   claude mcp add learnstack --scope user -- C:/Projects/learn-stack/.venv/Scripts/python.exe C:/Projects/learn-stack/app/mcp_server.py
-   # (this creates the entry with an empty "env": {} placeholder, at the top level of ~/.claude.json —
-   #  a sibling of "projects", not nested under any project path)
-
-   # 2. Fill the env block via a temp .ps1 (keeps secrets out of PSReadLine's persisted
-   #    interactive-command history — typing/pasting them at the prompt directly does not):
-   $path = "$HOME\.claude.json"
-   $content = [System.IO.File]::ReadAllText($path)
-   $newEnv = '"env": {"DATABASE_URL": "<NEON_URL>", "OPENAI_API_KEY": "<OPENAI_KEY>", "PYTHONPATH": "C:/Projects/learn-stack"}'
-   $content = $content.Replace('"env": {}', $newEnv)
-   [System.IO.File]::WriteAllText($path, $content, [System.Text.UTF8Encoding]::new($false))
-   ```
-   `python -m app.mcp_server` is deliberately not used — pointing at the script path directly (`app/mcp_server.py` has an `if __name__ == "__main__":` entry point) avoids the `-m` flag and its parser bug entirely. `PYTHONPATH` still matters so `app.*` imports resolve regardless of the host's own cwd. `.Replace('"env": {}', ...)` replaces every match in the file, not just the one you want — check the diff before saving.
-3. **`env` contents.** `DATABASE_URL` = the Neon string (scheme `postgresql+asyncpg://…`, keep `?sslmode=…&channel_binding=…` — the app strips them). `OPENAI_API_KEY` is only needed for `search_notes` (embedding the query); `create_note` doesn't embed. `PYTHONPATH` = repo root.
-4. **Verify.** From any of the three surfaces above: "save a LearnStack note about X" → `create_note` stages it → review/approve in the **Pending** tab of an app instance pointed at the *same* DB (the deployed Render app for Neon, or a local app run with `DATABASE_URL=<Neon>`). Note: a note staged into Neon will **not** appear in your local-Docker Pending tab — that's by design. Also note the MCP connection is picked up at Claude Code session **startup** — a session already running before registration won't see the new tools until restarted.
-
-**Out of scope for this phase:** claude.ai's web and mobile chat apps — and Claude Desktop's own "Connectors" settings, distinct from its Claude Code shell above — can't reach a local subprocess at all; they only connect to remote MCP servers over HTTPS with OAuth. That's the separate, not-yet-built **Remote MCP** phase, confirmed (via Anthropic's docs) to cover claude.ai web, Claude Desktop, and the mobile apps from one registration once built — not a gap in this phase.
-
-Full user-facing setup instructions live in `README.md` → **MCP server**.
-
----
-
-## Phase 16 — Complete ✓
-
-**Goal:** Every route in the deployed app — except `GET /health` — requires HTTP Basic Auth: a single hardcoded username/password pair, checked against `BASIC_AUTH_USERNAME`/`BASIC_AUTH_PASSWORD` env vars. Done when: hitting any gated route without credentials (or with wrong ones) returns 401 with a `WWW-Authenticate: Basic` challenge, and the browser's native Basic Auth prompt gates the web UI end-to-end with zero JS changes.
-
-**Why:** Phase 15 stood up a write path (MCP `create_note`) into the system-of-record database, behind a review gate but with zero authentication on the deployed app itself — anyone with the Render URL could browse or mutate every note. CLAUDE.md's next planned phase originally bundled this with exposing the MCP server remotely (over HTTP with OAuth), since standing up a public write endpoint is exactly when the app should stop being unauthenticated. Research done at the start of this phase found the OAuth/remote-MCP half is a substantial, self-contained build — the `mcp` SDK (v1.28.1, confirmed installed) ships a complete OAuth 2.1 authorization server (`create_auth_routes()`, PKCE, Dynamic Client Registration all built in), but the storage backend (a `OAuthAuthorizationServerProvider` implementation over new DB tables for clients/auth-codes/tokens) plus Streamable HTTP transport wiring still has to be hand-built — a different concern from gating existing routes. Per CLAUDE.md's explicit allowance to split if the OAuth half proved heavy, and the project's own one-phase-one-concern convention (cited for Phase 14's SSL fix vs. KMeans), this phase was split to cover Basic Auth only; Remote MCP + OAuth is now a separate future phase (see **Current phase** above), with the SDK research preserved in a note ("What claude.ai's custom connectors actually require of a remote MCP server," promoted into `notes`) for that future planning pass.
-
-**Built:**
-- [x] `app/auth.py` (new) — `get_current_user()`, a `HTTPBasic`-backed dependency comparing submitted credentials against `BASIC_AUTH_USERNAME`/`BASIC_AUTH_PASSWORD` via `secrets.compare_digest` (timing-safe). Unset env vars compare against empty strings, so an unconfigured deploy fails **closed** (locked out), not open. Failed attempts are logged at WARNING — message only, never the submitted username/password (the never-log-values rule).
-- [x] `app/main.py` — the dependency is applied at `app.include_router(..., dependencies=[Depends(get_current_user)])` for every router except `health.router`, mirroring the existing per-router registration style with no per-endpoint edits. The `/` UI route is gated directly. FastAPI's default `/docs`, `/redoc`, `/openapi.json` are disabled (`docs_url=None` etc.) and re-added as three thin gated routes using `fastapi.openapi.docs`/`fastapi.openapi.utils` helpers — router-level `dependencies=` doesn't cover FastAPI's built-in doc routes, and leaving the schema publicly browsable would be inconsistent with "not fully public." The `/static` mount (only `index.html`, unreferenced by the app itself) is left as-is — not worth touching in an auth-focused change.
-- [x] `tests/conftest.py` — the `client` fixture gains an `override_get_current_user` alongside the existing `override_get_db`, so none of the existing 48 tests needed auth headers added.
-- [x] `tests/test_auth.py` (new) — 6 tests using a separate fixture that does *not* override `get_current_user` (reuses the shared `engine` fixture, sets `BASIC_AUTH_USERNAME`/`PASSWORD` via `monkeypatch`): no credentials → 401 w/ `WWW-Authenticate` header; wrong credentials → 401; correct credentials → 200; `/health` → 200 with no credentials; `/docs` and `/openapi.json` → 401 without credentials, 200 with.
-- [x] `render.yaml` — `BASIC_AUTH_USERNAME`/`BASIC_AUTH_PASSWORD` added as `sync: false` dashboard secrets, matching `DATABASE_URL` etc.
-- [x] `.env.example` — both vars added with placeholder values and a comment.
-- [x] `import_notes.py` — now sends the `Authorization: Basic` header on `POST /notes` (the gate broke the script), reading `BASIC_AUTH_USERNAME`/`PASSWORD` from the same `.env` the local dev server reads via `load_dotenv()` — no new config. Header construction verified against the live dependency. Files that fail (including 401) stay in the inbox — only successful posts move to `processed/`.
-- [x] `setup.ps1` — the first-run "fill in `.env`" prompt now lists both Basic Auth vars as required.
-- [x] `README.md` — new **Authentication** section (credentials, fail-closed behavior, browser-native UX, what's unaffected); phases table updated; MCP section's remote-MCP pointer updated to the renamed **Remote MCP** future phase.
-
-Verified: full suite green — **54 passed** (48 existing + 6 new). Manually verified against a locally running instance with `BASIC_AUTH_USERNAME`/`PASSWORD` set: `GET /notes` with no credentials → 401 + `WWW-Authenticate: Basic`; wrong credentials → 401; correct credentials → 200; `GET /health` → 200 with no credentials; `GET /openapi.json` and `GET /docs` → 401 without credentials, 200 with; `GET /` → 401 without, 200 with.
-
-**Design decisions:**
-- **Router-level `dependencies=[Depends(get_current_user)]` at `include_router()`, not per-endpoint or ASGI middleware** — matches the codebase's existing per-router registration style in `app/main.py` and needed zero edits inside `app/routers/*.py`. A global ASGI middleware would need its own path-based exemption logic for `/health`; the per-router approach gets that exemption for free by simply omitting the dependency on `health.router`.
-- **`/health` is the only route left ungated** — Render's health check can't supply credentials, and it carries no data.
-- **`/docs`, `/redoc`, `/openapi.json` disabled by default and re-added behind auth** — FastAPI's built-in doc routes aren't covered by router-level `dependencies=`, so left alone the full API schema would stay publicly browsable even though actual calls against it would 401. Inconsistent with the phase's "not fully public" goal, so this phase disables the built-ins and re-implements them as three thin gated routes.
-- **Fail closed on unset env vars** — `get_current_user` compares against `os.getenv(..., "")`, so a deploy that forgot to set the Basic Auth secrets locks everyone out rather than leaving every route open. A startup crash or an open app are both worse outcomes than a locked one for a personal app.
-- **`secrets.compare_digest`, not `==`** — the standard, timing-safe comparison recipe for HTTP Basic Auth; avoids a timing side-channel on credential comparison.
-- **Failed auth attempts logged at WARNING, with no values** — a failed login on a wrong-credentials submission is a recoverable oddity per the Phase 13 level convention (like a 0-result search), not an ERROR; the line carries no submitted username or password, consistent with the never-log-values rule. The no-credentials 401 (the browser's initial challenge) is raised by `HTTPBasic` itself before `get_current_user` runs, so only actual wrong-credential submissions are logged — the routine prompt-trigger isn't noise in the logs.
-- **Static Client ID/Secret confirmed for the future Remote MCP phase, not Dynamic Client Registration** — considered and explicitly confirmed during this phase's planning: this is a single personal user with exactly one client that will ever connect (all of claude.ai's surfaces — web, Desktop, Cowork, mobile — share one registration server-side, confirmed via Anthropic's docs), so DCR's value (supporting clients you don't know about in advance) doesn't apply. Recorded here so the decision isn't re-litigated when that phase is planned.
-- **Existing tests need no auth-header changes** — the `client` fixture in `conftest.py` overrides `get_current_user` alongside the existing `get_db` override (identical mechanism already established for `db_session` in Phase 15), so all 48 pre-existing tests pass unmodified. Only `test_auth.py` exercises the real dependency, via its own non-overriding fixture.
-- **`import_notes.py` reads its credentials from `.env`, not new config** — the script targets the local dev server (`127.0.0.1:8000`), which reads the same `.env`, so the credentials can't drift between client and server. Sending Basic Auth over plain `http://` is only acceptable because the target is loopback — if the script is ever repointed at the deployed app (see the retire-vs-repoint Follow-up), it must use the `https://` Render URL, never plain http to a remote host. Constraint worth knowing: FastAPI's `HTTPBasic` decodes credentials as ASCII, so keep the chosen username/password ASCII-only (and no `:` in the username — RFC 7617).
-
-**Risks / gotchas:**
-- **Deploy ordering** — `BASIC_AUTH_USERNAME`/`PASSWORD` must be set in Render's dashboard at or before the deploy that ships this code, or the app locks out everyone including its own admin until they're set (fails closed, per the design decision above — the safer failure mode, but still worth flagging as a deploy-time gotcha).
-- **No logout mechanism** — Basic Auth has no server-side session to invalidate; the browser caches credentials until the browser/tab is closed or site data is cleared. Acceptable at personal scale.
-- **Local stdio MCP server is untouched** — `app/mcp_server.py` connects to Postgres directly via `AsyncSessionLocal`, never through FastAPI/HTTP, so this phase has zero effect on it.
+- [Phase 1 — Notes CRUD API](docs/phases/phase-1.md) — FastAPI + Postgres CRUD, keyword search, notes-inbox import workflow
+- [Phase 2 — Alembic migrations](docs/phases/phase-2.md) — `create_all` on startup replaced with Alembic migrations
+- [Phase 3 — pgvector setup](docs/phases/phase-3.md) — pgvector extension + `embedding` column (custom Docker image)
+- [Phase 4 — Embedding pipeline](docs/phases/phase-4.md) — embeddings generated on note create/update (`text-embedding-3-small`)
+- [Phase 5 — Semantic search](docs/phases/phase-5.md) — `POST /query` — cosine-similarity semantic search
+- [Phase 6 — LLM answer generation](docs/phases/phase-6.md) — `POST /ask` — grounded answers citing your own notes
+- [Phase 7 — Draft agent](docs/phases/phase-7.md) — `POST /draft` — structures raw pasted content into a note (forced tool use)
+- [Phase 8 — Web UI](docs/phases/phase-8.md) — single-page web UI served at `/` (no framework, no build step)
+- [Phase 9 — Setup script](docs/phases/phase-9.md) — `setup.ps1` — one-command local setup from a clean clone
+- [Phase 10 — Cloud deployment (Render)](docs/phases/phase-10.md) — Render deploy: two Dockerfiles, `render.yaml`, migrations on startup
+- [Phase 11 — Notes Assistant (/chat agent loop)](docs/phases/phase-11.md) — `POST /chat` multi-tool agent loop; confirm-before-save `create_note`
+- [Phase 12 — Continuous integration](docs/phases/phase-12.md) — GitHub Actions test gate, suite-wide embedding mock, branch protection
+- [Phase 13 — Logging](docs/phases/phase-13.md) — leveled logging conventions, `LOG_LEVEL`, never-log-values rule
+- [Phase 14 — Neon database migration](docs/phases/phase-14.md) — production Postgres moved to Neon; `split_ssl_args`, `pool_pre_ping`, deploy-order gotchas
+- [Phase 15 — Local stdio MCP server](docs/phases/phase-15.md) — stdio MCP server (`search_notes` + staged `create_note`), pending review gate, **MCP host wiring**
+- [Phase 16 — HTTP Basic Auth](docs/phases/phase-16.md) — HTTP Basic Auth on every route except `/health`; fail-closed; gated `/docs`
 
 ---
 
@@ -368,204 +137,6 @@ Planned components:
 - Choosing K is a manual/iterative judgment call — bad K gives meaningless clusters
 - LLM labeling adds a small API cost per cluster per run
 - Render free-tier process sleep could cause the in-process scheduler to miss runs — needs verification once deployed
-
----
-
-## Phase 10 — Complete ✓
-
-**Goal:** LearnStack running on Render with a managed Postgres database and a public URL. ✓
-
-Built:
-- [x] `Dockerfile.app` — Python 3.11-slim image for the FastAPI web service (separate from the local-dev Postgres `Dockerfile`)
-- [x] `app/routers/health.py` — `GET /health` returns `{"status": "ok"}`; used by Render for health checks
-- [x] `app/main.py` — health router registered
-- [x] `render.yaml` — Render config-as-code: web service (Docker, `Dockerfile.app`) + managed Postgres instance
-
-**Design decisions:**
-- Two Dockerfiles: `Dockerfile` (Postgres + pgvector, local dev only) and `Dockerfile.app` (Python/FastAPI, used by Render) — keeps concerns separate and avoids confusing the Render build
-- `render.yaml` marks all three env vars (`DATABASE_URL`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) as `sync: false` — values are set manually in the Render dashboard, never committed to the repo
-- `render.yaml` must specify `plan: free` on the web service — Render defaults to the Starter tier ($7/month) if omitted
-- Alembic migration runs automatically on startup via `CMD alembic upgrade head && uvicorn ...` in `Dockerfile.app` — Shell access is not available on the free tier, so manual migration is not possible; Alembic is idempotent so re-running on every deploy is safe
-- `Dockerfile.app` uses `python:3.11-slim` (not Alpine) — avoids common compile-time issues with async Postgres drivers (`asyncpg`)
-- Health endpoint is deliberately simple — no DB ping, no dependency checks; Render just needs an HTTP 200 to confirm the process started
-
-**Deployment steps (first deploy):**
-1. Push repo to GitHub
-2. In Render dashboard: New → Blueprint → connect repo → Render reads `render.yaml` and creates the web service and database
-3. Set env vars in Render dashboard: `DATABASE_URL` (copy the Internal Database URL from the managed DB's connection string panel, change `postgres://` to `postgresql+asyncpg://`), `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`
-4. Deploy — migrations run automatically on startup
-5. App is live at the Render-assigned URL
-
-**Loading local notes into Render (optional):**
-
-`pg_dump` and `pg_restore` are not installed locally — Postgres runs in Docker, so these commands must be run via `docker exec`.
-
-```powershell
-# Dump local database
-docker exec -t learn-stack-db-1 pg_dump -U postgres -d learnstack -F c -f /tmp/learnstack_backup.dump
-docker cp learn-stack-db-1:/tmp/learnstack_backup.dump ./learnstack_backup.dump
-docker exec learn-stack-db-1 rm /tmp/learnstack_backup.dump
-
-# Restore to Render (data only — schema already exists from migrations)
-docker cp learnstack_backup.dump learn-stack-db-1:/tmp/learnstack_backup.dump
-docker exec -t learn-stack-db-1 pg_restore -d "postgresql+asyncpg://..." --no-owner --data-only -t notes -F c /tmp/learnstack_backup.dump
-docker exec learn-stack-db-1 rm /tmp/learnstack_backup.dump
-```
-
-Use `--data-only -t notes` to skip schema creation and only restore note rows. Any duplicate key errors on a single row can be ignored — they mean that note already exists in Render.
-
----
-
-## Phase 9 — Complete ✓
-
-**Goal:** A single PowerShell script (`setup.ps1`) that automates the full local dev setup from a clean clone. One command brings the full stack up. ✓
-
-Built:
-- [x] `setup.ps1` — 7-step setup: Docker up → venv → pip install → .env copy → Alembic migrations → test DB → uvicorn dev server
-- [x] `README.md` — Getting started section rewritten to point to the script
-
-**Design decisions:**
-- Script pauses and exits after copying `.env.example` to `.env` on first run — forces the user to fill in API keys before proceeding
-- Test database creation is idempotent — `CREATE DATABASE` errors are suppressed if the DB already exists; `CREATE EXTENSION IF NOT EXISTS` is already idempotent
-- Postgres readiness is polled with `pg_isready` before running migrations — avoids a race condition on first container start
-- The script does not handle macOS/Linux — PowerShell only; a future `setup.sh` is the right approach for cross-platform support
-- `Set-StrictMode -Version Latest` and `$ErrorActionPreference = "Stop"` — fail fast on any unexpected error rather than continuing in a broken state
-
----
-
-## Phase 8 — Complete ✓
-
-**Goal:** A single-page web UI served by FastAPI at `/`. All API capabilities accessible without touching Swagger. ✓
-
-Built:
-- [x] `static/index.html` — full single-page UI: Draft & Save, Notes, Ask, Semantic Search tabs
-- [x] `app/main.py` — `StaticFiles` mount at `/static`, `GET /` returns `index.html`
-
-**Design decisions:**
-- Single HTML file, no framework, no build step — plain HTML + `fetch()` only
-- FastAPI serves the file directly via `FileResponse` — no separate server or CDN needed
-- Draft flow is two-step by design: `/draft` populates an editable form, user reviews before calling `/notes`
-- Notes list lazy-loads on first tab open, not on page load
-- Delete requires a `confirm()` dialog — one accidental click should not destroy a note
-
----
-
-## Phase 7 — Complete ✓
-
-**Goal:** `POST /draft` accepts raw pasted content and returns a structured `NoteCreate` draft for review. The user then saves it manually via `POST /notes`. ✓
-
-Built:
-- [x] `app/agent.py` — async Anthropic client, `draft_note(raw_content)` uses Claude tool use with `tool_choice` forced to `create_note`, returns a `NoteCreate`
-- [x] `DraftRequest` and `DraftResponse` schemas added to `app/schemas/note.py`
-- [x] `app/routers/draft.py` — `POST /draft` endpoint: raw content → agent → draft note
-- [x] `app/main.py` — draft router registered
-- [x] `tests/test_draft.py` — 6 tests using `AsyncMock` to patch `draft_note`
-
-**Design decisions:**
-- No URL support in Phase 7 — paste-only. URL fetching deferred to a later phase.
-- No new `NoteType` values added — existing enum covers all current use cases.
-- Job postings deferred to Phase 8 with a dedicated table.
-- Human-in-the-loop by design: `/draft` returns a draft, does not auto-save. The user reviews before calling `POST /notes`.
-- `tool_choice={"type": "tool", "name": "create_note"}` forces structured output — Claude cannot respond in prose.
-- `_DRAFT_TOOL` is module-level (not inside the function) — it's a static definition, no reason to recreate it per call.
-
----
-
-## Phase 6 — Complete ✓
-
-**Goal:** `POST /ask` accepts a question and returns a grounded answer citing the user's own notes. ✓
-
-Built:
-- [x] `anthropic>=0.25.0` added to `requirements.txt`
-- [x] `ANTHROPIC_API_KEY` added to `.env.example`
-- [x] `app/llm.py` — async Anthropic client, `generate_answer(question, context_notes)` builds context from retrieved notes and calls `claude-haiku-4-5-20251001`
-- [x] `AskRequest` and `AskResponse` schemas added to `app/schemas/note.py`
-- [x] `app/routers/ask.py` — `POST /ask` endpoint: semantic search → LLM → answer + sources
-- [x] `app/main.py` — ask router registered
-- [x] `tests/test_ask.py` — 5 tests using `AsyncMock` to patch `generate_answer`
-
-**Design decisions:**
-- `_client()` is a function (not module-level) so the Anthropic SDK doesn't read `ANTHROPIC_API_KEY` at import time
-- Tests mock `generate_answer` because LLM responses are non-deterministic; real API calls are tested for embeddings (deterministic) but not for answers
-- `sources` in the response are the notes actually passed as context — caller can see exactly what grounded the answer
-
----
-
-## Phase 5 — Complete ✓
-
-**Goal:** `POST /query` accepts a question string and returns notes ranked by semantic similarity. ✓
-
-Built:
-- [x] `QueryRequest` and `QueryResult` schemas added to `app/schemas/note.py`
-- [x] `search_notes_semantic` added to `app/crud/notes.py` — embeds query, runs pgvector cosine distance, filters NULL embeddings, returns `(note, score)` pairs
-- [x] `app/routers/query.py` — `POST /query` endpoint, registered in `app/main.py`
-- [x] `tests/test_query.py` — 6 tests: empty DB, happy path, score shape, response fields, ranking, limit
-
-**Note:** No vector index added (ivfflat/hnsw). Not needed at personal-note scale. Add via Alembic migration if query performance degrades as the notes database grows.
-
----
-
-## Phase 4 — Complete ✓
-
-**Goal:** Generate and store vector embeddings for notes automatically on create and update. ✓
-
-Built:
-- [x] `openai>=1.0.0` added to `requirements.txt`
-- [x] `OPENAI_API_KEY` added to `.env.example`
-- [x] `app/embeddings.py` — async helper calling `text-embedding-3-small`, returns 1536 floats
-- [x] `app/models/note.py` — `embedding` column added to ORM model using `pgvector.sqlalchemy.Vector(1536)`
-- [x] `app/crud/notes.py` — `create_note` embeds on create; `update_note` re-embeds only when `content` changes
-
----
-
-## Phase 3 — Complete ✓
-
-**Goal:** Add the pgvector Postgres extension and an `embedding` column to the notes table via Alembic migration. No Python application changes yet — just learning how Postgres extensions work and how to add a column to an existing table safely. ✓
-
-Built:
-- [x] Switched Docker image to a custom build with pgvector compiled from source (`Dockerfile`)
-- [x] `pgvector>=0.3.0` added to `requirements.txt`
-- [x] Alembic migration: `CREATE EXTENSION IF NOT EXISTS vector` + `embedding vector(1536)` column (`alembic/versions/7fd0d6c70b7f_add_pgvector_embedding_column.py`)
-- [x] Migration applied — pgvector 0.8.0 active, `notes` table has `embedding` column
-
----
-
-## Phase 2 — Complete ✓
-
-The original Phase 2 scope included new model fields (tags, source, confidence, status) plus Alembic migrations. The extra fields are deferred until the system is in real use and the need is felt. Alembic was the only addition.
-
-**Goal:** Replace the `create_all` on startup approach with Alembic migrations — the standard way real projects manage schema changes safely. ✓
-
-Built:
-- [x] Alembic initialized (`alembic.ini`, `alembic/env.py`)
-- [x] env.py configured for async engine and model registration
-- [x] First migration generated and applied (`alembic/versions/`)
-- [x] `create_all` removed from `app/main.py`
-
-**What is explicitly deferred from original Phase 2:**
-- tags (Array[String])
-- source enum
-- confidence enum
-- status enum
-
----
-
-## Phase 1 — Complete ✓
-
-Goal: Build a FastAPI backend with Postgres that supports full CRUD on technical notes, plus basic keyword search.
-
-Done when: A note about `dbt seed` can be created, stored, retrieved by ID, found via keyword search, updated, and deleted — all through the API. ✓
-
-Built:
-- [x] PostgreSQL 15 service via Docker Compose (`docker-compose.yml`)
-- [x] SQLAlchemy async engine and session (`app/database.py`)
-- [x] Note ORM model with all Phase 1 fields (`app/models/note.py`)
-- [x] Pydantic schemas: NoteCreate, NoteUpdate, NoteResponse (`app/schemas/note.py`)
-- [x] CRUD operations (`app/crud/notes.py`)
-- [x] Route handlers (`app/routers/notes.py`)
-- [x] FastAPI entry point (`app/main.py`)
-- [x] Test suite — 10 tests passing (`tests/test_notes.py`)
-- [x] `notes-inbox/` note capture workflow and batch import script (`import_notes.py`)
 
 ---
 
@@ -617,6 +188,11 @@ learnstack/
 ├── alembic/                 # Migration scripts
 │   ├── env.py
 │   └── versions/
+├── docs/
+│   └── phases/             # Archived completed-phase narratives (moved verbatim from CLAUDE.md)
+├── .claude/
+│   └── commands/
+│       └── wrap-phase.md    # /wrap-phase — end-of-phase docs/archive/commit/PR checklist
 ├── static/
 │   └── index.html           # Single-page web UI (Draft & Save, Notes, Pending, Ask, Assistant, Semantic Search)
 ├── notes-inbox/             # Markdown notes awaiting API import
@@ -966,7 +542,7 @@ registration covers all three) to capture a note; the MCP `create_note` tool
 and approve it in the web UI's **Pending** tab, which promotes it into
 `notes` (embedding the final text). Pointed at `DATABASE_URL=<Neon>`, this is
 the path that lands notes in the system-of-record DB behind a human review
-gate. See Phase 15 → **MCP host wiring** for the registration sequence. Note:
+gate. See `docs/phases/phase-15.md` → **MCP host wiring** for the registration sequence. Note:
 `notes-inbox/` writes to *local* Docker, while this path targets Neon — they
 are not the same database. (claude.ai's web/mobile chat apps are a separate,
 not-yet-built remote-MCP phase — this path doesn't reach them.)
