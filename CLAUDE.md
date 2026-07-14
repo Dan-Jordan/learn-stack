@@ -51,7 +51,7 @@ Phase 15 (local stdio MCP server) is complete — see `docs/phases/phase-15.md`.
 
 **Future phases are unnumbered.** Completed phases keep their numbers as a historical record; upcoming work is listed in order *without* numbers, so phases can be reordered or inserted without renumbering everything downstream. The future phases below are in intended order.
 
-**Future phase — Remote MCP (next up).** The MCP server (Phase 15's stdio path) is exposed remotely over HTTP with OAuth 2.1 + PKCE, so claude.ai's web/mobile chat apps and Claude Desktop's own Connectors (not just Claude Code) can reach it. Originally bundled with HTTP Basic Auth as one "Authentication + remote MCP" phase; split out (Phase 16) once research showed the OAuth/remote-transport half is a substantially larger, separate build — the `mcp` SDK ships a complete OAuth 2.1 authorization server (PKCE, Dynamic Client Registration all built in), but the storage backend (an `OAuthAuthorizationServerProvider` implementation over new DB tables for clients/auth-codes/tokens) plus Streamable HTTP transport wiring still has to be hand-built. Client registration will use a **static Client ID/Secret**, not Dynamic Client Registration — confirmed during Phase 16's planning: this is a single personal user with exactly one client that will ever connect (all of claude.ai's surfaces share one registration server-side). No standalone section yet — a full plan will be written when it comes up.
+**Future phase — Remote MCP (next up).** The MCP server (Phase 15's stdio path) is exposed remotely over HTTP with OAuth 2.1 + PKCE, so claude.ai's web/mobile chat apps and Claude Desktop's own Connectors (not just Claude Code) can reach it. Originally bundled with HTTP Basic Auth as one "Authentication + remote MCP" phase; split out (Phase 16) once research showed the OAuth/remote-transport half is a substantially larger, separate build — the `mcp` SDK ships a complete OAuth 2.1 authorization server (PKCE, Dynamic Client Registration all built in), but the storage backend (an `OAuthAuthorizationServerProvider` implementation over new DB tables for clients/auth-codes/tokens) plus Streamable HTTP transport wiring still has to be hand-built. Client registration will use a **static Client ID/Secret**, not Dynamic Client Registration — confirmed during Phase 16's planning: this is a single personal user with exactly one client that will ever connect (all of claude.ai's surfaces share one registration server-side). **Full plan: see the "Future phase — Remote MCP" section below.**
 
 **Future phase — Insights.** A scheduled clustering pipeline over note embeddings. See the Insights section below.
 
@@ -108,6 +108,71 @@ Conventions section. Consult an archive when working on something that phase bui
 - [Phase 14 — Neon database migration](docs/phases/phase-14.md) — production Postgres moved to Neon; `split_ssl_args`, `pool_pre_ping`, deploy-order gotchas
 - [Phase 15 — Local stdio MCP server](docs/phases/phase-15.md) — stdio MCP server (`search_notes` + staged `create_note`), pending review gate, **MCP host wiring**
 - [Phase 16 — HTTP Basic Auth](docs/phases/phase-16.md) — HTTP Basic Auth on every route except `/health`; fail-closed; gated `/docs`
+
+---
+
+## Future phase — Remote MCP (next up)
+
+**Goal:** Expose the Phase 15 MCP server (`search_notes` + staged `create_note`) remotely over HTTPS with OAuth 2.1 + PKCE, so claude.ai's web/mobile chat apps and Claude Desktop's Connectors — not just Claude Code — can search and capture notes, with staged writes still landing in `pending_notes` behind the Pending-tab review gate.
+
+**Why:** The stdio server only reaches surfaces that can spawn a local process. Remote transport + OAuth is the standard way custom connectors authenticate against claude.ai; the notes data is personal, so the endpoint must not be open.
+
+**What the SDK provides vs. what gets hand-built** (verified against the installed `mcp` 1.28.1):
+
+*SDK provides, ready-made:*
+- `mcp.server.auth.routes.create_auth_routes(provider, issuer_url, …)` — the complete OAuth endpoint set as Starlette routes: `/.well-known/oauth-authorization-server` (RFC 8414 metadata), `/authorize`, `/token`, plus optional `/register` (DCR — stays disabled) and `/revoke`. PKCE verification and client-secret authentication happen inside the SDK's handlers.
+- `create_protected_resource_routes(…)` — `/.well-known/oauth-protected-resource` (RFC 9728), which is how a connecting client discovers the authorization server.
+- `mcp.server.auth.middleware.bearer_auth` — `BearerAuthBackend` (validates the `Authorization: Bearer` header via the provider) + `RequireAuthMiddleware` (401/403 with proper `WWW-Authenticate`).
+- `mcp.server.streamable_http_manager.StreamableHTTPSessionManager` — the Streamable HTTP transport. It wraps the **existing** `server` object from `app/mcp_server.py` unchanged — the low-level `mcp.server.Server` is transport-agnostic, so the Phase 15 tools, schemas, and dispatch need zero changes. Supports `stateless=True` (fresh transport per request) and `json_response=True` (plain JSON instead of SSE).
+
+*Hand-built in this phase:*
+- An `OAuthAuthorizationServerProvider` implementation (`mcp.server.auth.provider` defines the protocol: `get_client`, `authorize`, `load/exchange_authorization_code`, `load/exchange_refresh_token`, `load_access_token`, `revoke_token`) backed by new DB tables.
+- The human login step. The SDK's `/authorize` handler calls `provider.authorize()` and expects back a redirect URL — it has no login UI. Plan: `authorize()` stores the request's `AuthorizationParams` under a random transaction id and redirects to a small consent route **gated by the existing Basic Auth dependency** (`get_current_user`); the browser's Basic Auth prompt *is* the login. On success the route mints the auth code and redirects to the client's `redirect_uri` with `code` + `state`. Single user → no separate consent screen needed beyond the auth gate.
+- FastAPI wiring: appending the SDK's Starlette routes, mounting `/mcp` behind the bearer middleware, and a lifespan context (required — `StreamableHTTPSessionManager.run()` must be entered before it can handle requests; `app/main.py` currently has no lifespan).
+
+**Planned components:**
+- [ ] `app/models/oauth.py` — `OAuthAuthCode` and `OAuthToken` ORM models (no client table — the single static client comes from env vars)
+- [ ] Alembic migration — `oauth_auth_codes` (code hash, client_id, scopes, code_challenge, redirect_uri, expiry, used flag) + `oauth_tokens` (token hash, kind access/refresh, client_id, scopes, expiry, revoked flag)
+- [ ] `app/oauth_provider.py` — the provider implementation + static-client lookup from `MCP_OAUTH_CLIENT_ID`/`MCP_OAUTH_CLIENT_SECRET`
+- [ ] `app/routers/oauth_consent.py` (or a route in `main.py`) — the Basic-Auth-gated consent/login redirect target
+- [ ] `app/main.py` — lifespan for the session manager; append `create_auth_routes` + `create_protected_resource_routes`; mount `/mcp` wrapped in `AuthenticationMiddleware(BearerAuthBackend)` + `RequireAuthMiddleware`
+- [ ] `render.yaml` / Render dashboard — `MCP_OAUTH_CLIENT_ID`, `MCP_OAUTH_CLIENT_SECRET` (`sync: false`); `PUBLIC_BASE_URL` (committed value — not a secret; feeds `issuer_url`)
+- [ ] `tests/test_oauth.py` — provider semantics against `db_session`: auth code single-use + expiry, token exchange, refresh rotation, revocation, fail-closed on unset client env vars
+- [ ] `tests/test_mcp_http.py` — endpoint tests via `client`: metadata endpoints public, `/mcp` 401s without a bearer token, full tool call succeeds with a valid token, PKCE mismatch rejected at `/token`
+
+**Session plan.** The phase is built across seven working sessions. Each session is a self-contained unit of work that ends at a logical review point: tests green, diff reviewed, and a git commit proposed **before** continuing to the next session. A session starts by re-reading this section; work stays inside the session's scope even if the next session's code is obvious. Sessions confirm their listed decision points (from the table below) before building on them.
+
+**Branch / PR workflow (agreed at planning):** all sessions commit to one branch, `feature/phase-17-remote-mcp`. A **draft PR** is opened right after session 1's first push — CI triggers on `pull_request` and pushes to `main` only, so without an open PR the per-session pushes would never run the test suite. The draft PR accumulates one commit per session and merges **at the start of session 7** (Render auto-deploys from `main`, so the code must merge before the live deploy can be verified). The `/wrap-phase` docs then land as a small follow-up PR, matching the Phase 15/16 pattern (PRs #9, #12).
+
+1. **Session 1 — Connector contract research (no code).** Verify claude.ai's "Add custom connector" flow accepts a manually supplied Client ID/Secret (the settled static-client decision); find the exact callback/redirect URI(s) claude.ai and Claude Desktop use; confirm Streamable HTTP transport expectations. If DCR turns out to be mandatory in practice, stop and revisit (see Risks). *Ends with:* findings recorded in this section; commit is docs-only; push and open the draft PR.
+2. **Session 2 — OAuth tables.** `app/models/oauth.py` (`OAuthAuthCode`, `OAuthToken`) + Alembic migration; `alembic upgrade head` verified locally. Confirms decision #1 (same app) and the schema side of #3 (hashed columns). *Ends with:* migration applied + reversible; commit.
+3. **Session 3 — Provider.** `app/oauth_provider.py` — the `OAuthAuthorizationServerProvider` implementation + static-client lookup from env; `tests/test_oauth.py` for storage semantics (code single-use/expiry, exchange, refresh rotation, revocation, fail-closed on unset env). Confirms decisions #3, #5 (TTLs), #7 (lazy cleanup). *Ends with:* unit tests green; commit.
+4. **Session 4 — Consent/login route.** The `/authorize` → transaction-id → Basic-Auth-gated consent route → code minting → redirect flow. Confirms decision #2. *Ends with:* route tests green; commit.
+5. **Session 5 — Mount the OAuth endpoints.** `create_auth_routes` + `create_protected_resource_routes` appended in `main.py`; Basic Auth exclusions verified per route (metadata public, `/token` client-secret-authed); revocation enabled per decision #6. *Ends with:* endpoint auth-mode tests green; commit.
+6. **Session 6 — Streamable HTTP `/mcp` mount.** `StreamableHTTPSessionManager` + lifespan + bearer middleware; confirms decision #4 (stateless + JSON). Verify a full authorize → token → tool-call round trip locally (`mcp` client SDK or MCP Inspector); `tests/test_mcp_http.py` (tool call with valid token, 401 without, PKCE mismatch rejected) green in CI. *Ends with:* local round trip demonstrated; commit — phase code complete.
+7. **Session 7 — Deploy, connect, wrap.** Starts by marking the draft PR ready and merging it (sessions 1–6 code). Render env vars staged ("Save only", per the Phase 14 lesson) so the merge-triggered deploy picks them up; add the connector in claude.ai and verify end-to-end: search works, `create_note` stages to `pending_notes`, Pending-tab approval promotes. Then `/wrap-phase`: phase archive, CLAUDE.md updates, decisions log. *Ends with:* wrap-up docs as a small follow-up PR (the Phase 15/16 pattern).
+
+**Design decisions (proposed — confirm at the session where each bites):**
+
+| # | Decision point | Bites at session | Recommendation |
+|---|---|---|---|
+| 1 | Same FastAPI app/process vs. a separate Render service for the remote MCP | 2 | **Same app.** One deploy, shares the engine/session and Neon `DATABASE_URL`, no new infrastructure — "start simple." A second free-tier service would double cold-start pain. |
+| 2 | Resource-owner login at `/authorize`: reuse Basic Auth creds vs. auto-approve (rely on client secret alone) vs. a bespoke login page | 4 | **Reuse Basic Auth.** Auto-approve leaves the authorize step unauthenticated (weak even if the token exchange still needs the secret); a bespoke page is new surface for one user. The browser-native prompt costs nothing. |
+| 3 | Token storage: SHA-256 hash at rest vs. plaintext | 2–3 | **Hash.** Tokens are opaque random strings looked up by exact match, so hashing is a one-line change that makes a DB leak non-catastrophic. |
+| 4 | Transport mode: `stateless=True` + `json_response=True` vs. stateful SSE sessions | 6 | **Stateless + JSON.** Two short-lived tools, no server-initiated messages, no resumability need; stateless mirrors Phase 15's fresh-session-per-tool-call design. Revisit only if a client requires SSE. |
+| 5 | TTLs: auth code / access token / refresh token | 3 | **5 min / 1 hour / 90 days with rotation on refresh.** Conventional values; refresh rotation is what the SDK docstring recommends. |
+| 6 | Expose `/revoke`? (DCR `/register` stays off per the settled static-client decision) | 5 | **Yes.** `RevocationOptions(enabled=True)` is nearly free and gives a kill switch for a leaked token without a redeploy. |
+| 7 | Expired-row cleanup: scheduled purge vs. lazy delete | 3 | **Lazy.** Delete expired/used rows when encountered on load; row volume is trivial for one user. A scheduler here would be over-engineering (the Insights phase introduces one properly). |
+| 8 | Local stdio path (Phase 15) | n/a | **Keep.** Remote MCP is additive; Claude Code stays on stdio (no OAuth hop, works offline against local Docker). Revisit consolidation once remote is proven. |
+
+**Risks / gotchas:**
+- **DCR contingency:** the static-client decision assumes claude.ai's connector form accepts a supplied Client ID/Secret. If a claude.ai surface insists on Dynamic Client Registration, the fallback is enabling the SDK's `/register` endpoint with `register_client` persisting to a small clients table — a contained change, but it reopens a settled decision, so surface it before building around it.
+- **Basic Auth vs. Bearer coexistence:** `/mcp`, `/authorize`, `/token`, and both `.well-known` routes must be *excluded* from the Phase 16 Basic Auth gate (claude.ai sends `Bearer`, not `Basic`; metadata must be publicly discoverable; `/token` authenticates via client secret). The consent route is the one place Basic Auth deliberately applies. Getting an exclusion wrong fails closed (401), so test each route's auth mode explicitly.
+- **Transport security settings:** the Streamable HTTP transport validates Host/Origin against `TransportSecuritySettings` (DNS-rebinding protection). The Render hostname must be allowed or every request 400s — verify locally with a spoofed Host header before deploying.
+- **`issuer_url` must match the public URL exactly** (scheme + host, no trailing-slash drift) — clients validate metadata against it. Locally it's `http://localhost:8000` (the SDK permits http for localhost only); on Render it's the `https://` URL via `PUBLIC_BASE_URL`.
+- **Lifespan ordering:** the session manager's `run()` context must wrap the app's lifetime; forgetting it produces a runtime "Task group is not initialized" error only on the first `/mcp` request — easy to miss in tests that never hit the mount.
+- **Render free-tier sleep:** the OAuth handshake and first tool call after idle eat the cold start (~30s+ spin-up plus the known Neon wake). claude.ai may time out a first attempt and succeed on retry — observe before treating it as a bug.
+- **Never log token or code values** (Phase 13 rule) — log ids, client_id, and counts only. The consent route logs at the same WARNING-no-values standard as `app/auth.py`.
 
 ---
 
